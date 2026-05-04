@@ -54,41 +54,46 @@ export function PrdGenerator() {
     store.save(snapshot);
   }, [isHydrated, snapshot, store]);
 
-  const answeredQuestionCount = Math.max(
-    0,
-    snapshot.messages.filter((message) => message.role === "user").length - 1,
-  );
-  const canGenerate = snapshot.readyToGenerate || answeredQuestionCount >= 1;
-
   async function handleBriefSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!projectIdea.trim() || isChatLoading) return;
 
     const title = createTitle(projectIdea);
-    const briefText = [
-      `Project idea: ${projectIdea.trim()}`,
-      "Before creating the final PRD, analyze this project and ask the most important requirement questions.",
-    ].join("\n");
 
     const nextSnapshot: ConversationSnapshot = {
       ...snapshot,
       title,
       projectIdea: projectIdea.trim(),
-      phase: "brief",
-      messages: [createMessage("user", briefText)],
+      phase: "techstack",
+      messages: [],
       lastQuestions: [],
       markdown: "",
       readyToGenerate: false,
-      nextStep: "AI is analyzing the brief",
+      nextStep: "Technology preference",
+      updatedAt: new Date().toISOString(),
+    };
+
+    setError("");
+    setCopied(false);
+    setQuestionAnswers([]);
+    setSnapshot(nextSnapshot);
+  }
+
+  async function handleTechStackSubmit(techStackPref: string) {
+    if (!snapshot.projectIdea.trim() || isChatLoading) return;
+
+    const nextSnapshot: ConversationSnapshot = {
+      ...snapshot,
+      phase: "techstack",
+      messages: [createMessage("user", buildInitialBriefMessage(snapshot.projectIdea, techStackPref))],
+      lastQuestions: [],
+      markdown: "",
+      readyToGenerate: false,
+      nextStep: "AI is analyzing the brief and tech stack",
       updatedAt: new Date().toISOString(),
     };
 
     await sendChat(nextSnapshot, "questions");
-  }
-
-  async function handleQuestionSubmit(event: FormEvent<HTMLFormElement>) {
-    // This is no longer used since we go straight to generate
-    event.preventDefault();
   }
 
   async function sendChat(nextSnapshot: ConversationSnapshot, nextPhase: ConversationSnapshot["phase"]) {
@@ -132,7 +137,7 @@ export function PrdGenerator() {
     }
   }
 
-  async function generatePrd(techStackPref?: string) {
+  async function generatePrd() {
     if (isGenerating) return;
 
     setError("");
@@ -140,34 +145,24 @@ export function PrdGenerator() {
     setIsGenerating(true);
 
     const latestQuestions = getLatestQuestions(snapshot);
-    const hasAnswer = questionAnswers.some((item) => item.selected.length > 0 || item.note.trim());
 
-    let finalMessages = snapshot.messages;
+    const answerContent = latestQuestions.length
+      ? latestQuestions
+          .map((question, index) => {
+            const response = questionAnswers[index];
+            if (!response) return `Question: ${question.text}\nAnswer: Not answered.`;
 
-    if (hasAnswer || techStackPref) {
-      const answerContent = latestQuestions.length
-        ? latestQuestions
-            .map((question, index) => {
-              const response = questionAnswers[index];
-              if (!response) return `Question: ${question.text}\nAnswer: Not answered.`;
+            const selected = response.selected.length > 0 ? response.selected.join(", ") : "-";
+            const note = response.note.trim() ? response.note.trim() : "-";
+            return `Question: ${question.text}\nAnswer: ${selected}\nNotes: ${note}`;
+          })
+          .join("\n\n")
+      : questionAnswers
+          .map((item) => [item.selected.join(", "), item.note.trim()].filter(Boolean).join("\n"))
+          .filter(Boolean)
+          .join("\n\n");
 
-              const selected = response.selected.length > 0 ? response.selected.join(", ") : "-";
-              const note = response.note.trim() ? response.note.trim() : "-";
-              return `Question: ${question.text}\nAnswer: ${selected}\nNotes: ${note}`;
-            })
-            .join("\n\n")
-        : questionAnswers
-            .map((item) => [item.selected.join(", "), item.note.trim()].filter(Boolean).join("\n"))
-            .filter(Boolean)
-            .join("\n\n");
-
-      let userMessageContent = answerContent || "User skipped answers.";
-      if (techStackPref) {
-        userMessageContent += `\n\nTech Stack Preference: ${techStackPref}`;
-      }
-
-      finalMessages = [...snapshot.messages, createMessage("user", userMessageContent)];
-    }
+    const finalMessages = [...snapshot.messages, createMessage("user", answerContent || "User skipped answers.")];
 
     try {
       const response = await fetch("/api/generate", {
@@ -318,10 +313,18 @@ export function PrdGenerator() {
             {snapshot.phase === "brief" ? (
               <BriefStep
                 projectIdea={projectIdea}
-                isLoading={isChatLoading}
                 error={error}
                 onProjectIdeaChange={setProjectIdea}
                 onSubmit={handleBriefSubmit}
+              />
+            ) : null}
+
+            {snapshot.phase === "techstack" ? (
+              <TechStackStep
+                projectIdea={snapshot.projectIdea}
+                isLoading={isChatLoading}
+                error={error}
+                onSubmit={handleTechStackSubmit}
               />
             ) : null}
 
@@ -373,7 +376,6 @@ function LoadingStep() {
 
 function BriefStep(props: {
   projectIdea: string;
-  isLoading: boolean;
   error: string;
   onProjectIdeaChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -385,8 +387,8 @@ function BriefStep(props: {
         Project apa yang ingin dibuat?
       </h2>
       <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
-        Tulis ide project. AI akan memproses brief ini dulu, lalu membuat halaman pertanyaan
-        untuk memperjelas requirement.
+        Tulis ide project dulu. Setelah itu pilih preferensi teknologi, baru AI menyusun
+        pertanyaan requirement yang lebih relevan.
       </p>
 
       <label className="mt-8 block text-sm font-black text-stone-800" htmlFor="projectIdea">
@@ -406,10 +408,126 @@ function BriefStep(props: {
       <div className="mt-8 flex justify-end">
         <button
           type="submit"
-          disabled={!props.projectIdea.trim() || props.isLoading}
+          disabled={!props.projectIdea.trim()}
           className="rounded-full bg-stone-950 px-6 py-4 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {props.isLoading ? "AI memproses..." : "Process Brief"}
+          Lanjut
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function TechStackStep(props: {
+  projectIdea: string;
+  isLoading: boolean;
+  error: string;
+  onSubmit: (techStackPref: string) => void;
+}) {
+  const [techStackChoice, setTechStackChoice] = useState<"ai" | "manual">("ai");
+  const [manualTechStack, setManualTechStack] = useState("");
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const techStackPref =
+      techStackChoice === "ai"
+        ? "Biarkan AI memilih tech stack yang paling sesuai dengan project ini."
+        : manualTechStack.trim() || "Bebas, tetapi user ingin AI membantu menentukan detail stack.";
+
+    props.onSubmit(techStackPref);
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
+      <p className="text-sm font-bold text-stone-500">Step 2</p>
+      <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
+        Preferensi teknologi
+      </h2>
+      <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
+        Pilihan ini dipakai AI untuk membuat pertanyaan yang lebih pas, jadi halaman berikutnya
+        tidak perlu mengulang pertanyaan dasar soal framework atau database.
+      </p>
+
+      {props.projectIdea ? (
+        <div className="mt-6 rounded-3xl border border-stone-200 bg-stone-50 p-5">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-stone-400">Brief</p>
+          <p className="mt-2 line-clamp-3 text-sm leading-7 text-stone-700">{props.projectIdea}</p>
+        </div>
+      ) : null}
+
+      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label
+          className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
+            techStackChoice === "ai"
+              ? "border-orange-500 bg-stone-900 text-white"
+              : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
+          }`}
+        >
+          <input
+            type="radio"
+            name="techStack"
+            value="ai"
+            className="sr-only"
+            checked={techStackChoice === "ai"}
+            onChange={() => setTechStackChoice("ai")}
+          />
+          <div className="mb-2 flex items-center gap-3">
+            <div className={`rounded-lg p-1.5 ${techStackChoice === "ai" ? "text-orange-500" : "text-stone-500"}`}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M9 10h.01"></path><path d="M15 10h.01"></path></svg>
+            </div>
+            <span className="text-base font-bold">Biarkan AI pilih</span>
+          </div>
+          <p className={`text-sm ${techStackChoice === "ai" ? "text-stone-300" : "text-stone-500"}`}>
+            AI rekomendasiin stack yang paling cocok buat project kamu
+          </p>
+        </label>
+
+        <label
+          className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
+            techStackChoice === "manual"
+              ? "border-orange-500 bg-stone-900 text-white"
+              : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
+          }`}
+        >
+          <input
+            type="radio"
+            name="techStack"
+            value="manual"
+            className="sr-only"
+            checked={techStackChoice === "manual"}
+            onChange={() => setTechStackChoice("manual")}
+          />
+          <div className="mb-2 flex items-center gap-3">
+            <div className={`rounded-lg p-1.5 ${techStackChoice === "manual" ? "text-orange-500" : "text-stone-500"}`}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </div>
+            <span className="text-base font-bold">Pilih sendiri</span>
+          </div>
+          <p className={`text-sm ${techStackChoice === "manual" ? "text-stone-300" : "text-stone-500"}`}>
+            Kamu tentuin teknologi yang mau dipakai
+          </p>
+        </label>
+      </div>
+
+      {techStackChoice === "manual" ? (
+        <textarea
+          value={manualTechStack}
+          onChange={(event) => setManualTechStack(event.target.value)}
+          rows={3}
+          placeholder="Contoh: Next.js, Tailwind CSS, Supabase"
+          className="mt-4 w-full resize-none rounded-2xl border-2 border-stone-200 bg-white p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900"
+        />
+      ) : null}
+
+      {props.error ? <ErrorMessage message={props.error} /> : null}
+
+      <div className="mt-8 flex justify-end">
+        <button
+          type="submit"
+          disabled={props.isLoading}
+          className="rounded-full bg-stone-950 px-6 py-4 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {props.isLoading ? "AI menyusun pertanyaan..." : "Lanjut"}
         </button>
       </div>
     </form>
@@ -422,11 +540,8 @@ function QuestionsStep(props: {
   isChatLoading: boolean;
   error: string;
   onAnswerChange: (value: AnswerState[]) => void;
-  onGenerate: (techStackPref: string) => void;
+  onGenerate: () => void;
 }) {
-  const [techStackChoice, setTechStackChoice] = useState<"ai" | "manual">("ai");
-  const [manualTechStack, setManualTechStack] = useState("");
-
   const latestQuestions = getLatestQuestions(props.snapshot);
   const previousMessages = props.snapshot.messages.slice(1, -1);
   const hasQuestions = latestQuestions.length > 0;
@@ -436,10 +551,7 @@ function QuestionsStep(props: {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const techStackPref = techStackChoice === "ai"
-      ? "Dipilihkan oleh AI yang paling sesuai dengan project ini"
-      : manualTechStack.trim() || "Bebas (ditentukan AI)";
-    props.onGenerate(techStackPref);
+    props.onGenerate();
   }
 
   function updateAnswer(index: number, value: string) {
@@ -476,6 +588,7 @@ function QuestionsStep(props: {
     <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200 pb-6">
         <div>
+          <p className="text-sm font-bold text-stone-500">Step 3</p>
           <h2 className="font-display text-3xl font-black tracking-[-0.03em] text-stone-900">
             Beberapa pertanyaan
           </h2>
@@ -504,71 +617,6 @@ function QuestionsStep(props: {
       )}
 
       <form onSubmit={handleSubmit} className="mt-6">
-        <div className="mb-8 border-b border-stone-200 pb-8">
-          <h3 className="text-xl font-black text-stone-900 tracking-[-0.02em]">Preferensi teknologi</h3>
-          <p className="mt-1 text-sm text-stone-500">Udah punya pilihan tech stack, atau mau AI yang tentuin?</p>
-
-          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <label className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
-              techStackChoice === "ai"
-                ? "border-orange-500 bg-stone-900 text-white"
-                : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
-            }`}>
-              <input
-                type="radio"
-                name="techStack"
-                value="ai"
-                className="sr-only"
-                checked={techStackChoice === "ai"}
-                onChange={() => setTechStackChoice("ai")}
-              />
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`p-1.5 rounded-lg ${techStackChoice === "ai" ? "text-orange-500" : "text-stone-500"}`}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M9 10h.01"></path><path d="M15 10h.01"></path></svg>
-                </div>
-                <span className="font-bold text-base">Biarkan AI pilih</span>
-              </div>
-              <p className={`text-sm ${techStackChoice === "ai" ? "text-stone-300" : "text-stone-500"}`}>
-                AI rekomendasiin stack yang paling cocok buat project kamu
-              </p>
-            </label>
-
-            <label className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
-              techStackChoice === "manual"
-                ? "border-orange-500 bg-stone-900 text-white"
-                : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
-            }`}>
-              <input
-                type="radio"
-                name="techStack"
-                value="manual"
-                className="sr-only"
-                checked={techStackChoice === "manual"}
-                onChange={() => setTechStackChoice("manual")}
-              />
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`p-1.5 rounded-lg ${techStackChoice === "manual" ? "text-orange-500" : "text-stone-500"}`}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                </div>
-                <span className="font-bold text-base">Pilih sendiri</span>
-              </div>
-              <p className={`text-sm ${techStackChoice === "manual" ? "text-stone-300" : "text-stone-500"}`}>
-                Kamu tentuin teknologi yang mau dipakai
-              </p>
-            </label>
-          </div>
-
-          {techStackChoice === "manual" && (
-            <textarea
-              value={manualTechStack}
-              onChange={(e) => setManualTechStack(e.target.value)}
-              rows={2}
-              placeholder="Contoh: Next.js, Tailwind CSS, Supabase"
-              className="mt-4 w-full resize-none rounded-2xl border-2 border-stone-200 bg-white p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900"
-            />
-          )}
-        </div>
-
         <div className="space-y-6">
           {hasQuestions ? (
             latestQuestions.map((question, index) => {
@@ -662,7 +710,7 @@ function ResultStep(props: {
     <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-bold text-stone-500">Step 3</p>
+          <p className="text-sm font-bold text-stone-500">Step 4</p>
           <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em]">
             Final PRD
           </h2>
@@ -710,6 +758,7 @@ function ResultStep(props: {
 function StepIndicator({ phase }: { phase: ConversationSnapshot["phase"] }) {
   const steps: Array<{ id: ConversationSnapshot["phase"]; label: string }> = [
     { id: "brief", label: "Brief" },
+    { id: "techstack", label: "Tech Stack" },
     { id: "questions", label: "Questions" },
     { id: "result", label: "Result" },
   ];
@@ -772,6 +821,15 @@ function createMessage(role: ChatMessage["role"], content: string): ChatMessage 
     content: content.trim(),
     createdAt: new Date().toISOString(),
   };
+}
+
+function buildInitialBriefMessage(projectIdea: string, techStackPref: string) {
+  return [
+    `Project idea: ${projectIdea.trim()}`,
+    `Tech Stack Preference: ${techStackPref.trim()}`,
+    "Before creating the final PRD, analyze this project and tech stack preference, then ask the most important requirement questions.",
+    "Do not ask for technology choices that are already answered by the tech stack preference.",
+  ].join("\n");
 }
 
 function formatAssistantMessage(message: string, questions: ChatQuestion[]) {

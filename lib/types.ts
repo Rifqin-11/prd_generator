@@ -1,6 +1,6 @@
 export type TemplateMode = "simple" | "technical" | "startup";
 
-export type ConversationPhase = "brief" | "questions" | "result";
+export type ConversationPhase = "brief" | "techstack" | "questions" | "result";
 
 export type ChatRole = "user" | "assistant";
 
