@@ -255,49 +255,59 @@ export function PrdGenerator() {
     URL.revokeObjectURL(url);
   }
 
+  async function sharePrd() {
+    if (!snapshot.markdown) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: snapshot.title || "Product Requirements Document",
+          text: snapshot.markdown,
+        });
+      } catch (error) {
+        // user aborted or error
+      }
+    } else {
+      await copyMarkdown();
+    }
+  }
+
   return (
     <main className="min-h-screen bg-stone-50 text-stone-950">
       <div className="grid min-h-screen lg:grid-cols-[320px_1fr]">
-        <aside className="border-b border-stone-200 bg-white px-5 py-5 lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between gap-3 lg:block">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-400">
-                PRD Generator
-              </p>
-              <h1 className="mt-2 font-display text-2xl font-black tracking-[-0.04em]">
-                History
-              </h1>
-            </div>
+        <aside className="border-b border-stone-200 bg-white px-5 py-6 lg:border-b-0 lg:border-r lg:flex lg:flex-col lg:h-screen lg:sticky lg:top-0">
+          <div className="mb-6">
+            <h1 className="font-display text-2xl font-black tracking-[-0.04em] text-stone-950">
+              PRD Generator
+            </h1>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-2 pb-4">
             <button
               type="button"
               onClick={startNewPrd}
-              className="rounded-full border border-stone-300 px-4 py-2 text-sm font-bold transition hover:border-stone-950 hover:bg-stone-950 hover:text-white"
+              className={`flex w-full items-center justify-center rounded-2xl border-2 border-dashed p-4 text-sm font-bold transition ${
+                snapshot.phase === "brief" && !snapshot.sessionId
+                  ? "border-stone-900 bg-stone-50 text-stone-950"
+                  : "border-stone-200 bg-white text-stone-500 hover:border-stone-400 hover:text-stone-900"
+              }`}
             >
-              New
+              + New PRD
             </button>
-          </div>
 
-          <div className="mt-6 space-y-2">
-            {history.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-500">
-                Belum ada PRD. Hasil yang sudah digenerate akan muncul di sini.
-              </div>
-            ) : (
-              history.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => openHistory(item)}
-                  className={`w-full rounded-2xl border p-4 text-left transition hover:border-stone-950 ${
-                    snapshot.sessionId === item.id
-                      ? "border-stone-950 bg-stone-950 text-white"
-                      : "border-stone-200 bg-white text-stone-950"
-                  }`}
-                >
-                  <span className="block truncate text-sm font-black">{item.title}</span>
-                </button>
-              ))
-            )}
+            {history.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => openHistory(item)}
+                className={`w-full rounded-2xl border p-4 text-left transition hover:border-stone-950 ${
+                  snapshot.sessionId === item.id
+                    ? "border-stone-950 bg-stone-950 text-white"
+                    : "border-stone-200 bg-white text-stone-950"
+                }`}
+              >
+                <span className="block truncate text-sm font-black">{item.title}</span>
+              </button>
+            ))}
           </div>
         </aside>
 
@@ -337,7 +347,7 @@ export function PrdGenerator() {
                 error={error}
                 onCopy={copyMarkdown}
                 onDownload={downloadMarkdown}
-                onNew={startNewPrd}
+                onShare={sharePrd}
               />
             ) : null}
           </div>
@@ -497,20 +507,20 @@ function QuestionsStep(props: {
         <div className="mb-8 border-b border-stone-200 pb-8">
           <h3 className="text-xl font-black text-stone-900 tracking-[-0.02em]">Preferensi teknologi</h3>
           <p className="mt-1 text-sm text-stone-500">Udah punya pilihan tech stack, atau mau AI yang tentuin?</p>
-          
+
           <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <label className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
-              techStackChoice === "ai" 
-                ? "border-orange-500 bg-stone-900 text-white" 
+              techStackChoice === "ai"
+                ? "border-orange-500 bg-stone-900 text-white"
                 : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
             }`}>
-              <input 
-                type="radio" 
-                name="techStack" 
-                value="ai" 
+              <input
+                type="radio"
+                name="techStack"
+                value="ai"
                 className="sr-only"
-                checked={techStackChoice === "ai"} 
-                onChange={() => setTechStackChoice("ai")} 
+                checked={techStackChoice === "ai"}
+                onChange={() => setTechStackChoice("ai")}
               />
               <div className="flex items-center gap-3 mb-2">
                 <div className={`p-1.5 rounded-lg ${techStackChoice === "ai" ? "text-orange-500" : "text-stone-500"}`}>
@@ -524,17 +534,17 @@ function QuestionsStep(props: {
             </label>
 
             <label className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
-              techStackChoice === "manual" 
-                ? "border-orange-500 bg-stone-900 text-white" 
+              techStackChoice === "manual"
+                ? "border-orange-500 bg-stone-900 text-white"
                 : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
             }`}>
-              <input 
-                type="radio" 
-                name="techStack" 
-                value="manual" 
+              <input
+                type="radio"
+                name="techStack"
+                value="manual"
                 className="sr-only"
-                checked={techStackChoice === "manual"} 
-                onChange={() => setTechStackChoice("manual")} 
+                checked={techStackChoice === "manual"}
+                onChange={() => setTechStackChoice("manual")}
               />
               <div className="flex items-center gap-3 mb-2">
                 <div className={`p-1.5 rounded-lg ${techStackChoice === "manual" ? "text-orange-500" : "text-stone-500"}`}>
@@ -547,7 +557,7 @@ function QuestionsStep(props: {
               </p>
             </label>
           </div>
-          
+
           {techStackChoice === "manual" && (
             <textarea
               value={manualTechStack}
@@ -646,7 +656,7 @@ function ResultStep(props: {
   error: string;
   onCopy: () => void;
   onDownload: () => void;
-  onNew: () => void;
+  onShare: () => void;
 }) {
   return (
     <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
@@ -679,10 +689,11 @@ function ResultStep(props: {
           </button>
           <button
             type="button"
-            onClick={props.onNew}
+            onClick={props.onShare}
+            disabled={!props.snapshot.markdown}
             className="rounded-full border border-stone-300 px-4 py-3 text-sm font-black transition hover:border-stone-950"
           >
-            New PRD
+            Share
           </button>
         </div>
       </div>
