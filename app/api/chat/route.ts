@@ -110,12 +110,12 @@ function normalizeQuestions(value: unknown): ChatQuestion[] {
   if (!Array.isArray(value)) return [];
 
   return value
-    .map((item) => {
+    .map((item): ChatQuestion | null => {
       if (typeof item === "string") {
         const text = item.trim();
         if (!text) return null;
         if (looksLikeJson(text)) return null;
-        return { text, options: ["Lainnya"], multiSelect: true, allowFreeText: true } satisfies ChatQuestion;
+        return { text, options: ["Lainnya"], multiSelect: true, allowFreeText: true };
       }
 
       if (!item || typeof item !== "object") return null;
@@ -134,9 +134,9 @@ function normalizeQuestions(value: unknown): ChatQuestion[] {
         options: options.length > 0 ? options : ["Lainnya"],
         multiSelect: record.multiSelect === undefined ? true : Boolean(record.multiSelect),
         allowFreeText: record.allowFreeText === undefined ? true : Boolean(record.allowFreeText),
-      } satisfies ChatQuestion;
+      };
     })
-    .filter((item): item is ChatQuestion => Boolean(item));
+    .filter((item): item is ChatQuestion => item !== null);
 }
 
 function extractQuestionTextsFromRaw(raw: string): string[] {

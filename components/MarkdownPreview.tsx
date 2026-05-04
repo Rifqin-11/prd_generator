@@ -3,7 +3,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type MarkdownPreviewProps = {
   markdown: string;
@@ -28,10 +28,11 @@ if (typeof window !== "undefined") {
 
 function MermaidDiagram({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
-    if (ref.current && chart) {
+    if (ref.current && chart && !hasError) {
       const id = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
       mermaid
         .render(id, chart)
@@ -42,15 +43,26 @@ function MermaidDiagram({ chart }: { chart: string }) {
         })
         .catch((e) => {
           console.error("Mermaid error", e);
-          if (isMounted && ref.current) {
-            ref.current.innerHTML = `<div class="text-red-500 text-sm p-4 border border-red-200 rounded-xl bg-red-50">Gagal merender diagram. Format Mermaid tidak valid.</div>`;
+          if (isMounted) {
+            setHasError(true);
           }
         });
     }
     return () => {
       isMounted = false;
     };
-  }, [chart]);
+  }, [chart, hasError]);
+
+  if (hasError) {
+    return (
+      <div className="my-6 rounded-2xl border border-red-200 bg-red-50 p-4">
+        <p className="mb-2 text-sm font-bold text-red-700">⚠️ Diagram gagal dirender (Sintaks Mermaid tidak valid)</p>
+        <pre className="overflow-x-auto rounded-xl bg-white p-4 text-xs text-stone-800 shadow-sm border border-red-100">
+          <code>{chart}</code>
+        </pre>
+      </div>
+    );
+  }
 
   return (
     <div 
