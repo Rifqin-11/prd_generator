@@ -252,16 +252,24 @@ export function PrdGenerator() {
 
   async function sharePrd() {
     if (!snapshot.markdown) return;
-    if (navigator.share) {
-      try {
+
+    const shareData: ShareData = {
+      title: snapshot.title || "Product Requirements Document",
+      text: snapshot.markdown,
+    };
+
+    try {
+      if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
         await navigator.share({
           title: snapshot.title || "Product Requirements Document",
           text: snapshot.markdown,
         });
-      } catch (error) {
-        // user aborted or error
+        return;
       }
-    } else {
+
+      await copyMarkdown();
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       await copyMarkdown();
     }
   }
