@@ -1,6 +1,10 @@
 export type TemplateMode = "simple" | "technical" | "startup";
 
-export type ConversationPhase = "brief" | "techstack" | "questions" | "result";
+export type ConversationPhase = "brief" | "mode" | "techstack" | "questions" | "result";
+
+export type Phase = "discovery" | "refinement" | "validation" | "generation";
+
+export type QuestionMode = "fast" | "adaptive";
 
 export type ChatRole = "user" | "assistant";
 
@@ -19,14 +23,27 @@ export type ChatQuestion = {
   allowFreeText?: boolean;
 };
 
+export type StructuredAnswers = {
+  productIdea: string;
+  targetUser: string;
+  platform: string;
+  features: string[];
+  userFlow: string;
+  constraints: string[];
+};
+
 export type ConversationSnapshot = {
   sessionId: string;
   title: string;
   projectIdea: string;
   phase: ConversationPhase;
+  currentPhase: Phase;
+  questionMode: QuestionMode;
   templateMode: TemplateMode;
   messages: ChatMessage[];
   lastQuestions: ChatQuestion[];
+  summary: string;
+  structuredAnswers: StructuredAnswers;
   markdown: string;
   readyToGenerate: boolean;
   nextStep: string;
@@ -44,7 +61,8 @@ export type PrdHistoryItem = {
 export type ChatApiResponse = {
   message: string;
   questions: ChatQuestion[];
-  nextStep: string;
+  summary: string;
+  nextPhase: Phase;
   readyToGenerate: boolean;
 };
 

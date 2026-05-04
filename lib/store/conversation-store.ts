@@ -1,4 +1,5 @@
 import type { ConversationSnapshot, PrdHistoryItem, TemplateMode } from "@/lib/types";
+import { createEmptyStructuredAnswers } from "@/lib/phase-context";
 
 const STORAGE_KEY = "prd-generator:conversation";
 const HISTORY_KEY = "prd-generator:history";
@@ -64,9 +65,13 @@ export function createEmptyConversation(templateMode: TemplateMode): Conversatio
     title: "",
     projectIdea: "",
     phase: "brief",
+    currentPhase: "discovery",
+    questionMode: "adaptive",
     templateMode,
     messages: [],
     lastQuestions: [],
+    summary: "",
+    structuredAnswers: createEmptyStructuredAnswers(),
     markdown: "",
     readyToGenerate: false,
     nextStep: "Project brief",

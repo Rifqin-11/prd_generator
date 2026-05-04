@@ -2,7 +2,16 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { MarkdownPreview } from "@/components/MarkdownPreview";
-import { createEmptyConversation, SessionConversationStore } from "@/lib/store/conversation-store";
+import {
+  createEmptyConversation,
+  SessionConversationStore,
+} from "@/lib/store/conversation-store";
+import {
+  getPhaseStep,
+  mergeStructuredAnswers,
+  normalizePhase,
+  normalizeStructuredAnswers,
+} from "@/lib/phase-context";
 import type {
   ChatApiResponse,
   ChatMessage,
@@ -10,6 +19,7 @@ import type {
   ConversationSnapshot,
   GenerateApiResponse,
   PrdHistoryItem,
+  QuestionMode,
 } from "@/lib/types";
 
 type AnswerState = {
@@ -59,17 +69,22 @@ export function PrdGenerator() {
     if (!projectIdea.trim() || isChatLoading) return;
 
     const title = createTitle(projectIdea);
+    const structuredAnswers = mergeStructuredAnswers(snapshot.structuredAnswers, {
+      projectIdea: projectIdea.trim(),
+    });
 
     const nextSnapshot: ConversationSnapshot = {
       ...snapshot,
       title,
       projectIdea: projectIdea.trim(),
-      phase: "techstack",
+      phase: "mode",
       messages: [],
       lastQuestions: [],
+      summary: "",
+      structuredAnswers,
       markdown: "",
       readyToGenerate: false,
-      nextStep: "Technology preference",
+      nextStep: "Question mode",
       updatedAt: new Date().toISOString(),
     };
 
@@ -79,14 +94,39 @@ export function PrdGenerator() {
     setSnapshot(nextSnapshot);
   }
 
+  function handleQuestionModeSubmit(questionMode: QuestionMode) {
+    setError("");
+    setQuestionAnswers([]);
+    setSnapshot({
+      ...snapshot,
+      phase: "techstack",
+      questionMode,
+      nextStep: "Technology preference",
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   async function handleTechStackSubmit(techStackPref: string) {
     if (!snapshot.projectIdea.trim() || isChatLoading) return;
+
+    const structuredAnswers = mergeStructuredAnswers(snapshot.structuredAnswers, {
+      projectIdea: snapshot.projectIdea,
+      techStackPref,
+    });
 
     const nextSnapshot: ConversationSnapshot = {
       ...snapshot,
       phase: "techstack",
-      messages: [createMessage("user", buildInitialBriefMessage(snapshot.projectIdea, techStackPref))],
+      currentPhase: "discovery",
+      messages: [
+        createMessage(
+          "user",
+          buildInitialBriefMessage(snapshot.projectIdea, techStackPref),
+        ),
+      ],
       lastQuestions: [],
+      summary: "",
+      structuredAnswers,
       markdown: "",
       readyToGenerate: false,
       nextStep: "AI is analyzing the brief and tech stack",
@@ -96,7 +136,48 @@ export function PrdGenerator() {
     await sendChat(nextSnapshot, "questions");
   }
 
-  async function sendChat(nextSnapshot: ConversationSnapshot, nextPhase: ConversationSnapshot["phase"]) {
+  async function handleQuestionSubmit() {
+    if (isChatLoading || isGenerating) return;
+
+    const isValidation = snapshot.currentPhase === "validation";
+    const answerContent = isValidation
+      ? "User confirmed the validation summary and approved final PRD generation."
+      : buildAnswerContent(snapshot.lastQuestions, questionAnswers);
+    const userMessage = createMessage("user", answerContent || "User skipped answers.");
+    const structuredAnswers = mergeStructuredAnswers(snapshot.structuredAnswers, {
+      questions: snapshot.lastQuestions,
+      answerText: userMessage.content,
+    });
+
+    const nextSnapshot: ConversationSnapshot = {
+      ...snapshot,
+      messages: [...snapshot.messages, userMessage],
+      structuredAnswers,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (isValidation) {
+      await generatePrd({
+        ...nextSnapshot,
+        currentPhase: "generation",
+        readyToGenerate: true,
+        nextStep: "PRD generation",
+      });
+      return;
+    }
+
+    if (snapshot.questionMode === "fast") {
+      await generatePrd(nextSnapshot);
+      return;
+    }
+
+    await sendChat(nextSnapshot, "questions");
+  }
+
+  async function sendChat(
+    nextSnapshot: ConversationSnapshot,
+    nextPhase: ConversationSnapshot["phase"],
+  ) {
     setError("");
     setIsChatLoading(true);
     setSnapshot(nextSnapshot);
@@ -108,81 +189,89 @@ export function PrdGenerator() {
         body: JSON.stringify({
           sessionId: nextSnapshot.sessionId,
           templateMode: nextSnapshot.templateMode,
+          phase: nextSnapshot.currentPhase,
+          questionMode: nextSnapshot.questionMode,
+          structuredAnswers: nextSnapshot.structuredAnswers,
           messages: nextSnapshot.messages,
         }),
       });
 
-      const data = (await response.json()) as Partial<ChatApiResponse> & { error?: string };
-      if (!response.ok) throw new Error(data.error || "AI gagal memproses brief.");
+      const data = (await response.json()) as Partial<ChatApiResponse> & {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(data.error || "AI gagal memproses brief.");
+
+      const currentPhase = normalizePhase(data.nextPhase, nextSnapshot.currentPhase);
 
       setSnapshot({
         ...nextSnapshot,
         phase: nextPhase,
+        currentPhase,
         messages: [
           ...nextSnapshot.messages,
-          createMessage("assistant", formatAssistantMessage(data.message || "", data.questions || [])),
+          createMessage(
+            "assistant",
+            formatAssistantMessage(data.message || "", data.questions || [], data.summary || ""),
+          ),
         ],
-        readyToGenerate: Boolean(data.readyToGenerate),
-        nextStep: data.nextStep || "Requirement questions",
+        readyToGenerate: nextSnapshot.questionMode === "fast" || Boolean(data.readyToGenerate),
+        summary: data.summary || "",
+        nextStep: getPhaseStep(currentPhase),
         lastQuestions: data.questions || [],
         updatedAt: new Date().toISOString(),
       });
       setQuestionAnswers(
-        Array.from({ length: (data.questions || []).length }, () => ({ selected: [], note: "" })),
+        Array.from({ length: (data.questions || []).length }, () => ({
+          selected: [],
+          note: "",
+        })),
       );
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Terjadi error saat menghubungi AI.");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Terjadi error saat menghubungi AI.",
+      );
     } finally {
       setIsChatLoading(false);
     }
   }
 
-  async function generatePrd() {
+  async function generatePrd(sourceSnapshot = snapshot) {
     if (isGenerating) return;
 
     setError("");
     setCopied(false);
     setIsGenerating(true);
 
-    const latestQuestions = getLatestQuestions(snapshot);
-
-    const answerContent = latestQuestions.length
-      ? latestQuestions
-          .map((question, index) => {
-            const response = questionAnswers[index];
-            if (!response) return `Question: ${question.text}\nAnswer: Not answered.`;
-
-            const selected = response.selected.length > 0 ? response.selected.join(", ") : "-";
-            const note = response.note.trim() ? response.note.trim() : "-";
-            return `Question: ${question.text}\nAnswer: ${selected}\nNotes: ${note}`;
-          })
-          .join("\n\n")
-      : questionAnswers
-          .map((item) => [item.selected.join(", "), item.note.trim()].filter(Boolean).join("\n"))
-          .filter(Boolean)
-          .join("\n\n");
-
-    const finalMessages = [...snapshot.messages, createMessage("user", answerContent || "User skipped answers.")];
+    const finalMessages = [
+      ...sourceSnapshot.messages,
+      createMessage("user", buildGenerationContext(sourceSnapshot)),
+    ];
 
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: snapshot.sessionId,
-          templateMode: snapshot.templateMode,
+          sessionId: sourceSnapshot.sessionId,
+          templateMode: sourceSnapshot.templateMode,
           messages: finalMessages,
         }),
       });
 
-      const data = (await response.json()) as Partial<GenerateApiResponse> & { error?: string };
+      const data = (await response.json()) as Partial<GenerateApiResponse> & {
+        error?: string;
+      };
       if (!response.ok) throw new Error(data.error || "Generate PRD gagal.");
 
       const nextSnapshot: ConversationSnapshot = {
-        ...snapshot,
+        ...sourceSnapshot,
         messages: finalMessages,
         markdown: data.markdown || "",
         phase: "result",
+        currentPhase: "generation",
         lastQuestions: [],
         nextStep: "Final PRD",
         updatedAt: new Date().toISOString(),
@@ -193,9 +282,13 @@ export function PrdGenerator() {
       setHistory(nextHistory);
       store.saveHistory(nextHistory);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Terjadi error saat generate PRD.");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Terjadi error saat generate PRD.",
+      );
       // If failed, revert to questions phase so user can try again
-      setSnapshot(s => ({...s, phase: "questions"}));
+      setSnapshot((s) => ({ ...s, phase: "questions" }));
     } finally {
       setIsGenerating(false);
     }
@@ -219,8 +312,11 @@ export function PrdGenerator() {
       title: item.title,
       projectIdea: item.projectIdea,
       phase: "result",
+      currentPhase: "generation",
+      questionMode: "adaptive",
       markdown: item.markdown,
       lastQuestions: [],
+      summary: "",
       nextStep: "History preview",
       updatedAt: now,
     };
@@ -241,7 +337,9 @@ export function PrdGenerator() {
   function downloadMarkdown() {
     if (!snapshot.markdown) return;
 
-    const blob = new Blob([snapshot.markdown], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([snapshot.markdown], {
+      type: "text/markdown;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -259,7 +357,10 @@ export function PrdGenerator() {
     };
 
     try {
-      if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
+      if (
+        navigator.share &&
+        (!navigator.canShare || navigator.canShare(shareData))
+      ) {
         await navigator.share({
           title: snapshot.title || "Product Requirements Document",
           text: snapshot.markdown,
@@ -308,7 +409,9 @@ export function PrdGenerator() {
                     : "border-stone-200 bg-white text-stone-950"
                 }`}
               >
-                <span className="block truncate text-sm font-black">{item.title}</span>
+                <span className="block truncate text-sm font-black">
+                  {item.title}
+                </span>
               </button>
             ))}
           </div>
@@ -327,6 +430,10 @@ export function PrdGenerator() {
               />
             ) : null}
 
+            {snapshot.phase === "mode" ? (
+              <QuestionModeStep error={error} onSubmit={handleQuestionModeSubmit} />
+            ) : null}
+
             {snapshot.phase === "techstack" ? (
               <TechStackStep
                 projectIdea={snapshot.projectIdea}
@@ -337,8 +444,15 @@ export function PrdGenerator() {
             ) : null}
 
             {snapshot.phase === "questions" ? (
-              isGenerating ? (
-                <LoadingStep />
+              isGenerating || isChatLoading ? (
+                <LoadingStep
+                  title={isGenerating ? "Menyusun PRD Final..." : "Menganalisis jawaban..."}
+                  description={
+                    isGenerating
+                      ? "Harap tunggu sebentar sementara AI merangkum semua jawaban Anda dan menyusun PRD berdasarkan template yang ditentukan."
+                      : "AI sedang membaca jawaban terbaru dan menyiapkan langkah berikutnya."
+                  }
+                />
               ) : (
                 <QuestionsStep
                   snapshot={snapshot}
@@ -346,7 +460,7 @@ export function PrdGenerator() {
                   isChatLoading={isChatLoading}
                   error={error}
                   onAnswerChange={setQuestionAnswers}
-                  onGenerate={generatePrd}
+                  onSubmit={handleQuestionSubmit}
                 />
               )
             ) : null}
@@ -368,15 +482,15 @@ export function PrdGenerator() {
   );
 }
 
-function LoadingStep() {
+function LoadingStep(props: { title?: string; description?: string }) {
   return (
     <div className="rounded-[2rem] border border-stone-200 bg-white p-12 text-center shadow-sm flex flex-col items-center justify-center min-h-[400px]">
       <div className="h-12 w-12 animate-spin rounded-full border-4 border-stone-200 border-t-stone-900 mb-6"></div>
       <h2 className="font-display text-2xl font-black tracking-[-0.03em] text-stone-900">
-        Menyusun PRD Final...
+        {props.title || "Memproses..."}
       </h2>
       <p className="mt-3 text-sm text-stone-500 max-w-sm mx-auto leading-relaxed">
-        Harap tunggu sebentar sementara AI merangkum semua jawaban Anda dan menyusun PRD berdasarkan template yang ditentukan.
+        {props.description || "Harap tunggu sebentar."}
       </p>
     </div>
   );
@@ -389,17 +503,23 @@ function BriefStep(props: {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form onSubmit={props.onSubmit} className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
+    <form
+      onSubmit={props.onSubmit}
+      className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
+    >
       <p className="text-sm font-bold text-stone-500">Step 1</p>
       <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
         Project apa yang ingin dibuat?
       </h2>
       <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
-        Tulis ide project dulu. Setelah itu pilih preferensi teknologi, baru AI menyusun
-        pertanyaan requirement yang lebih relevan.
+        Tulis ide project dulu. Setelah itu pilih mode pertanyaan, preferensi
+        teknologi, lalu AI menyusun requirement.
       </p>
 
-      <label className="mt-8 block text-sm font-black text-stone-800" htmlFor="projectIdea">
+      <label
+        className="mt-8 block text-sm font-black text-stone-800"
+        htmlFor="projectIdea"
+      >
         Project brief
       </label>
       <textarea
@@ -426,6 +546,99 @@ function BriefStep(props: {
   );
 }
 
+function QuestionModeStep(props: {
+  error: string;
+  onSubmit: (questionMode: QuestionMode) => void;
+}) {
+  const [questionMode, setQuestionMode] = useState<QuestionMode>("adaptive");
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    props.onSubmit(questionMode);
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
+    >
+      <p className="text-sm font-bold text-stone-500">Step 2</p>
+      <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
+        Pilih cara AI bertanya
+      </h2>
+      <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
+        Mode cepat membuat daftar pertanyaan lengkap sekali jalan. Mode adaptive
+        bertanya bertahap berdasarkan jawaban sebelumnya.
+      </p>
+
+      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label
+          className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
+            questionMode === "fast"
+              ? "border-orange-500 bg-stone-900 text-white"
+              : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
+          }`}
+        >
+          <input
+            type="radio"
+            name="questionMode"
+            value="fast"
+            className="sr-only"
+            checked={questionMode === "fast"}
+            onChange={() => setQuestionMode("fast")}
+          />
+          <div className="mb-2 flex items-center gap-3">
+            <div className={`rounded-lg p-1.5 ${questionMode === "fast" ? "text-orange-500" : "text-stone-500"}`}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"></path></svg>
+            </div>
+            <span className="text-base font-bold">Cepat</span>
+          </div>
+          <p className={`text-sm ${questionMode === "fast" ? "text-stone-300" : "text-stone-500"}`}>
+            Sekali submit, AI membuat maksimal 10 pertanyaan lalu langsung lanjut generate PRD setelah dijawab
+          </p>
+        </label>
+
+        <label
+          className={`cursor-pointer rounded-2xl border-2 p-5 transition-all ${
+            questionMode === "adaptive"
+              ? "border-orange-500 bg-stone-900 text-white"
+              : "border-stone-200 bg-white text-stone-900 hover:border-stone-300"
+          }`}
+        >
+          <input
+            type="radio"
+            name="questionMode"
+            value="adaptive"
+            className="sr-only"
+            checked={questionMode === "adaptive"}
+            onChange={() => setQuestionMode("adaptive")}
+          />
+          <div className="mb-2 flex items-center gap-3">
+            <div className={`rounded-lg p-1.5 ${questionMode === "adaptive" ? "text-orange-500" : "text-stone-500"}`}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 10h8"></path><path d="M8 14h5"></path></svg>
+            </div>
+            <span className="text-base font-bold">Adaptive</span>
+          </div>
+          <p className={`text-sm ${questionMode === "adaptive" ? "text-stone-300" : "text-stone-500"}`}>
+            AI bertanya maksimal 3 pertanyaan per tahap dan menyesuaikan pertanyaan dari jawaban terbaru
+          </p>
+        </label>
+      </div>
+
+      {props.error ? <ErrorMessage message={props.error} /> : null}
+
+      <div className="mt-8 flex justify-end">
+        <button
+          type="submit"
+          className="rounded-full bg-stone-950 px-6 py-4 text-sm font-black text-white transition hover:-translate-y-0.5"
+        >
+          Lanjut
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function TechStackStep(props: {
   projectIdea: string;
   isLoading: boolean;
@@ -440,26 +653,35 @@ function TechStackStep(props: {
     const techStackPref =
       techStackChoice === "ai"
         ? "Biarkan AI memilih tech stack yang paling sesuai dengan project ini."
-        : manualTechStack.trim() || "Bebas, tetapi user ingin AI membantu menentukan detail stack.";
+        : manualTechStack.trim() ||
+          "Bebas, tetapi user ingin AI membantu menentukan detail stack.";
 
     props.onSubmit(techStackPref);
   }
 
   return (
-    <form onSubmit={handleSubmit} className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
-      <p className="text-sm font-bold text-stone-500">Step 2</p>
+    <form
+      onSubmit={handleSubmit}
+      className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
+    >
+      <p className="text-sm font-bold text-stone-500">Step 3</p>
       <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
         Preferensi teknologi
       </h2>
       <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
-        Pilihan ini dipakai AI untuk membuat pertanyaan yang lebih pas, jadi halaman berikutnya
-        tidak perlu mengulang pertanyaan dasar soal framework atau database.
+        Pilihan ini dipakai AI untuk membuat pertanyaan yang lebih pas, jadi
+        halaman berikutnya tidak perlu mengulang pertanyaan dasar soal framework
+        atau database.
       </p>
 
       {props.projectIdea ? (
         <div className="mt-6 rounded-3xl border border-stone-200 bg-stone-50 p-5">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-stone-400">Brief</p>
-          <p className="mt-2 line-clamp-3 text-sm leading-7 text-stone-700">{props.projectIdea}</p>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-stone-400">
+            Brief
+          </p>
+          <p className="mt-2 line-clamp-3 text-sm leading-7 text-stone-700">
+            {props.projectIdea}
+          </p>
         </div>
       ) : null}
 
@@ -480,12 +702,29 @@ function TechStackStep(props: {
             onChange={() => setTechStackChoice("ai")}
           />
           <div className="mb-2 flex items-center gap-3">
-            <div className={`rounded-lg p-1.5 ${techStackChoice === "ai" ? "text-orange-500" : "text-stone-500"}`}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M9 10h.01"></path><path d="M15 10h.01"></path></svg>
+            <div
+              className={`rounded-lg p-1.5 ${techStackChoice === "ai" ? "text-orange-500" : "text-stone-500"}`}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                <path d="M9 10h.01"></path>
+                <path d="M15 10h.01"></path>
+              </svg>
             </div>
             <span className="text-base font-bold">Biarkan AI pilih</span>
           </div>
-          <p className={`text-sm ${techStackChoice === "ai" ? "text-stone-300" : "text-stone-500"}`}>
+          <p
+            className={`text-sm ${techStackChoice === "ai" ? "text-stone-300" : "text-stone-500"}`}
+          >
             AI rekomendasiin stack yang paling cocok buat project kamu
           </p>
         </label>
@@ -506,12 +745,28 @@ function TechStackStep(props: {
             onChange={() => setTechStackChoice("manual")}
           />
           <div className="mb-2 flex items-center gap-3">
-            <div className={`rounded-lg p-1.5 ${techStackChoice === "manual" ? "text-orange-500" : "text-stone-500"}`}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <div
+              className={`rounded-lg p-1.5 ${techStackChoice === "manual" ? "text-orange-500" : "text-stone-500"}`}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
             </div>
             <span className="text-base font-bold">Pilih sendiri</span>
           </div>
-          <p className={`text-sm ${techStackChoice === "manual" ? "text-stone-300" : "text-stone-500"}`}>
+          <p
+            className={`text-sm ${techStackChoice === "manual" ? "text-stone-300" : "text-stone-500"}`}
+          >
             Kamu tentuin teknologi yang mau dipakai
           </p>
         </label>
@@ -548,18 +803,21 @@ function QuestionsStep(props: {
   isChatLoading: boolean;
   error: string;
   onAnswerChange: (value: AnswerState[]) => void;
-  onGenerate: () => void;
+  onSubmit: () => void;
 }) {
   const latestQuestions = getLatestQuestions(props.snapshot);
-  const previousMessages = props.snapshot.messages.slice(1, -1);
   const hasQuestions = latestQuestions.length > 0;
+  const isValidation = props.snapshot.currentPhase === "validation";
+  const isFastMode = props.snapshot.questionMode === "fast";
 
-  const answeredCount = props.questionAnswers.filter(a => a.selected.length > 0 || a.note.trim() !== '').length;
+  const answeredCount = props.questionAnswers.filter(
+    (a) => a.selected.length > 0 || a.note.trim() !== "",
+  ).length;
   const totalCount = latestQuestions.length;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    props.onGenerate();
+    props.onSubmit();
   }
 
   function updateAnswer(index: number, value: string) {
@@ -596,45 +854,55 @@ function QuestionsStep(props: {
     <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200 pb-6">
         <div>
-          <p className="text-sm font-bold text-stone-500">Step 3</p>
+          <p className="text-sm font-bold text-stone-500">Step 4</p>
           <h2 className="font-display text-3xl font-black tracking-[-0.03em] text-stone-900">
-            Beberapa pertanyaan
+            {isValidation ? "Validasi requirement" : "Beberapa pertanyaan"}
           </h2>
           <p className="mt-2 text-base text-stone-500">
-            Biar PRD-nya lebih akurat. Jawab semua pertanyaan di bawah.
+            {isValidation
+              ? "Review ringkasan requirement sebelum PRD final dibuat."
+              : isFastMode
+                ? "Jawab pertanyaan lengkap di bawah, lalu AI langsung membuat PRD final."
+                : "Biar PRD-nya lebih akurat. Jawab pertanyaan adaptif di bawah."}
           </p>
         </div>
-        {hasQuestions ? (
+        {hasQuestions && !isValidation ? (
           <div className="text-sm font-bold text-stone-500">
             {answeredCount}/{totalCount}
           </div>
         ) : null}
       </div>
 
-      {previousMessages.length > 0 && (
-        <div className="mt-6 space-y-3 rounded-3xl bg-stone-50 p-4">
-          {previousMessages.map((message) => (
-            <CompactMessageCard key={message.id} message={message} />
-          ))}
-          {props.isChatLoading ? (
-            <div className="rounded-2xl border border-stone-200 bg-white p-4 text-sm text-stone-500">
-              AI sedang menyusun pertanyaan lanjutan...
-            </div>
-          ) : null}
-        </div>
-      )}
-
       <form onSubmit={handleSubmit} className="mt-6">
-        <div className="space-y-6">
-          {hasQuestions ? (
+        {isValidation ? (
+          <div className="rounded-3xl border border-stone-200 bg-stone-50 p-5">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-stone-400">
+              Summary
+            </p>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-stone-700">
+              {props.snapshot.summary || "Requirement sudah cukup jelas untuk dibuat menjadi PRD final."}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {hasQuestions ? (
             latestQuestions.map((question, index) => {
-              const answer = props.questionAnswers[index] || { selected: [], note: "" };
-              const options = question.options && question.options.length > 0 ? question.options : ["Lainnya"];
+              const answer = props.questionAnswers[index] || {
+                selected: [],
+                note: "",
+              };
+              const options =
+                question.options && question.options.length > 0
+                  ? question.options
+                  : ["Lainnya"];
               const allowFreeText = question.allowFreeText ?? true;
               const multiSelect = question.multiSelect ?? true;
 
               return (
-                <div key={`${question.text}-${index}`} className="border-b border-stone-100 pb-6 last:border-0 last:pb-0">
+                <div
+                  key={`${question.text}-${index}`}
+                  className="border-b border-stone-100 pb-6 last:border-0 last:pb-0"
+                >
                   <div className="flex items-start justify-between gap-4">
                     <label
                       className="block text-base font-bold leading-7 text-stone-900"
@@ -658,7 +926,9 @@ function QuestionsStep(props: {
                         <button
                           key={`${option}-${index}`}
                           type="button"
-                          onClick={() => toggleOption(index, option, multiSelect)}
+                          onClick={() =>
+                            toggleOption(index, option, multiSelect)
+                          }
                           className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                             isSelected
                               ? "border-orange-500 text-orange-600 bg-orange-50"
@@ -674,7 +944,9 @@ function QuestionsStep(props: {
                     <textarea
                       id={`answer-${index}`}
                       value={answer.note}
-                      onChange={(event) => updateAnswer(index, event.target.value)}
+                      onChange={(event) =>
+                        updateAnswer(index, event.target.value)
+                      }
                       rows={2}
                       placeholder="Tambahkan detail jawaban jika perlu..."
                       className="mt-4 w-full resize-none rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900 focus:bg-white"
@@ -685,10 +957,11 @@ function QuestionsStep(props: {
             })
           ) : (
             <div className="rounded-3xl border border-dashed border-stone-200 bg-stone-50 p-6 text-center text-sm text-stone-500">
-              Tidak ada pertanyaan baru. Kamu bisa lanjut membuat PRD final.
+              Tidak ada pertanyaan baru. Kamu bisa lanjut ke validasi requirement.
             </div>
           )}
-        </div>
+          </div>
+        )}
 
         {props.error ? <ErrorMessage message={props.error} /> : null}
 
@@ -698,7 +971,7 @@ function QuestionsStep(props: {
             disabled={props.isChatLoading}
             className="rounded-full bg-stone-950 px-8 py-4 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Generate PRD
+            {isValidation || isFastMode ? "Generate PRD" : "Lanjut"}
           </button>
         </div>
       </form>
@@ -718,12 +991,13 @@ function ResultStep(props: {
     <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-bold text-stone-500">Step 4</p>
+          <p className="text-sm font-bold text-stone-500">Step 5</p>
           <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em]">
             Final PRD
           </h2>
           <p className="mt-3 text-sm leading-7 text-stone-500">
-            Output PRD dibuat dalam Bahasa Indonesia dan bisa didownload sebagai Markdown.
+            Output PRD dibuat dalam Bahasa Indonesia dan bisa didownload sebagai
+            Markdown.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -766,6 +1040,7 @@ function ResultStep(props: {
 function StepIndicator({ phase }: { phase: ConversationSnapshot["phase"] }) {
   const steps: Array<{ id: ConversationSnapshot["phase"]; label: string }> = [
     { id: "brief", label: "Brief" },
+    { id: "mode", label: "Mode" },
     { id: "techstack", label: "Tech Stack" },
     { id: "questions", label: "Questions" },
     { id: "result", label: "Result" },
@@ -787,33 +1062,6 @@ function StepIndicator({ phase }: { phase: ConversationSnapshot["phase"] }) {
   );
 }
 
-function CompactMessageCard({ message }: { message: ChatMessage }) {
-  const isUser = message.role === "user";
-  const questions = isUser ? [] : extractQuestions(message.content).slice(0, 2);
-  const summary = isUser
-    ? "Jawaban terkirim."
-    : questions.length > 0
-      ? questions.join(" | ")
-      : message.content.split(/\n+/)[0]?.slice(0, 140) || "Pertanyaan lanjutan.";
-
-  return (
-    <div
-      className={`rounded-2xl border px-4 py-3 text-xs leading-6 ${
-        isUser ? "border-stone-950 bg-stone-950 text-white" : "border-stone-200 bg-white text-stone-700"
-      }`}
-    >
-      <p
-        className={`mb-1 text-[0.65rem] font-black uppercase tracking-[0.2em] ${
-          isUser ? "text-white/50" : "text-stone-400"
-        }`}
-      >
-        {isUser ? "Jawaban" : "Pertanyaan"}
-      </p>
-      <p className="whitespace-pre-wrap break-words">{summary}</p>
-    </div>
-  );
-}
-
 function ErrorMessage({ message }: { message: string }) {
   return (
     <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
@@ -822,7 +1070,10 @@ function ErrorMessage({ message }: { message: string }) {
   );
 }
 
-function createMessage(role: ChatMessage["role"], content: string): ChatMessage {
+function createMessage(
+  role: ChatMessage["role"],
+  content: string,
+): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role,
@@ -840,9 +1091,42 @@ function buildInitialBriefMessage(projectIdea: string, techStackPref: string) {
   ].join("\n");
 }
 
-function formatAssistantMessage(message: string, questions: ChatQuestion[]) {
+function buildAnswerContent(questions: ChatQuestion[], answers: AnswerState[]) {
+  return questions.length
+    ? questions
+        .map((question, index) => {
+          const response = answers[index];
+          if (!response) return `Question: ${question.text}\nAnswer: Not answered.`;
+
+          const selected = response.selected.length > 0 ? response.selected.join(", ") : "-";
+          const note = response.note.trim() ? response.note.trim() : "-";
+          return `Question: ${question.text}\nAnswer: ${selected}\nNotes: ${note}`;
+        })
+        .join("\n\n")
+    : answers
+        .map((item) => [item.selected.join(", "), item.note.trim()].filter(Boolean).join("\n"))
+        .filter(Boolean)
+        .join("\n\n");
+}
+
+function buildGenerationContext(snapshot: ConversationSnapshot) {
+  return [
+    "Proceed with final PRD generation.",
+    snapshot.summary ? `Validation summary:\n${snapshot.summary}` : "",
+    "Structured answers:",
+    JSON.stringify(snapshot.structuredAnswers, null, 2),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatAssistantMessage(message: string, questions: ChatQuestion[], summary = "") {
+  if (summary.trim()) return summary.trim();
+
   const normalizedQuestions =
-    questions.length > 0 ? questions.map((question) => question.text) : extractQuestions(message);
+    questions.length > 0
+      ? questions.map((question) => question.text)
+      : extractQuestions(message);
   if (normalizedQuestions.length === 0) return message.trim();
 
   return normalizedQuestions
@@ -859,7 +1143,9 @@ function extractQuestions(value: string) {
   if (jsonQuestions.length > 0) return jsonQuestions;
 
   const matches = Array.from(
-    value.matchAll(/(?:^|\n)\s*(?:\d+[\).]|[-*])\s+([\s\S]+?)(?=\n\s*(?:\d+[\).]|[-*])\s+|\n{2,}|$)/g),
+    value.matchAll(
+      /(?:^|\n)\s*(?:\d+[\).]|[-*])\s+([\s\S]+?)(?=\n\s*(?:\d+[\).]|[-*])\s+|\n{2,}|$)/g,
+    ),
   )
     .map((match) => match[1].trim())
     .filter(Boolean);
@@ -896,7 +1182,10 @@ function slugify(value: string) {
   );
 }
 
-function upsertHistory(history: PrdHistoryItem[], snapshot: ConversationSnapshot) {
+function upsertHistory(
+  history: PrdHistoryItem[],
+  snapshot: ConversationSnapshot,
+) {
   const item: PrdHistoryItem = {
     id: snapshot.sessionId,
     title: snapshot.title || createTitle(snapshot.projectIdea),
@@ -905,21 +1194,35 @@ function upsertHistory(history: PrdHistoryItem[], snapshot: ConversationSnapshot
     createdAt: new Date().toISOString(),
   };
 
-  return [item, ...history.filter((entry) => entry.id !== item.id)].slice(0, 12);
+  return [item, ...history.filter((entry) => entry.id !== item.id)].slice(
+    0,
+    12,
+  );
 }
 
 function migrateSnapshot(snapshot: ConversationSnapshot) {
   const fallback = createEmptyConversation("technical");
   const phase =
-    snapshot.phase || (snapshot.markdown ? "result" : snapshot.messages.length > 0 ? "questions" : "brief");
+    snapshot.phase ||
+    (snapshot.markdown
+      ? "result"
+      : snapshot.messages.length > 0
+        ? "questions"
+        : "brief");
 
   return {
     ...fallback,
     ...snapshot,
-    title: snapshot.title || createTitle(snapshot.projectIdea || snapshot.messages[0]?.content || ""),
+    title:
+      snapshot.title ||
+      createTitle(snapshot.projectIdea || snapshot.messages[0]?.content || ""),
     projectIdea: snapshot.projectIdea || "",
     phase,
+    currentPhase: normalizePhase(snapshot.currentPhase, snapshot.readyToGenerate ? "generation" : "discovery"),
+    questionMode: snapshot.questionMode || "adaptive",
     lastQuestions: snapshot.lastQuestions || [],
+    summary: snapshot.summary || "",
+    structuredAnswers: normalizeStructuredAnswers(snapshot.structuredAnswers),
     updatedAt: snapshot.updatedAt || new Date().toISOString(),
   };
 }
