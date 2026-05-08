@@ -3,7 +3,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type MarkdownPreviewProps = {
   markdown: string;
@@ -26,23 +26,59 @@ if (typeof window !== "undefined") {
   });
 }
 
+/**
+ * Auto-fix sintaks mermaid yang sering AI-output tidak valid:
+ * - Wrap label flowchart node `[...]`, `(...)`, `{...}` dengan tanda kutip ganda
+ *   kalau labelnya mengandung karakter spesial (`(`, `)`, `<br/>`, `/`, `:`)
+ *   dan belum di-wrap.
+ *
+ * Tidak menyentuh erDiagram (di sana kutip ganda justru error).
+ */
+function sanitizeMermaid(chart: string): string {
+  const isErDiagram = /^\s*erDiagram/m.test(chart);
+  if (isErDiagram) return chart;
+
+  // Special chars yang butuh quoting di label flowchart.
+  const needsQuote = /[()/:,]|<br\s*\/?>/;
+
+  // Match: ID diikuti `[label]` / `(label)` / `{label}` di mana label belum
+  // diawali tanda kutip ganda.
+  // Contoh match: A[Mobile App<br/>(React Native / Flutter)]
+  return chart.replace(
+    /([A-Za-z_][\w-]*)\s*([\[(\{])([^"\]\)\}\n][^\]\)\}\n]*)([\]\)\}])/g,
+    (match, id, open, label, close) => {
+      // Skip jika label sudah punya kutip ganda di awal (sudah benar).
+      if (label.startsWith('"')) return match;
+      // Skip jika label tidak mengandung karakter problematik.
+      if (!needsQuote.test(label)) return match;
+      // Bracket harus match: [..], (..), {..}.
+      const expected =
+        open === "[" ? "]" : open === "(" ? ")" : open === "{" ? "}" : "";
+      if (close !== expected) return match;
+      return `${id}${open}"${label.trim()}"${close}`;
+    },
+  );
+}
+
 function MermaidDiagram({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [hasError, setHasError] = useState(false);
 
+  const safeChart = useMemo(() => sanitizeMermaid(chart), [chart]);
+
   useEffect(() => {
     let isMounted = true;
-    if (ref.current && chart && !hasError) {
+    if (ref.current && safeChart && !hasError) {
       const id = `mermaid-${Math.random().toString(36).substring(2, 9)}`;
       mermaid
-        .render(id, chart)
+        .render(id, safeChart)
         .then(({ svg }) => {
           if (isMounted && ref.current) {
             ref.current.innerHTML = svg;
           }
         })
         .catch((e) => {
-          console.error("Mermaid error", e);
+          console.error("Mermaid error", e, "\nChart:\n", safeChart);
           if (isMounted) {
             setHasError(true);
           }
@@ -51,7 +87,7 @@ function MermaidDiagram({ chart }: { chart: string }) {
     return () => {
       isMounted = false;
     };
-  }, [chart, hasError]);
+  }, [safeChart, hasError]);
 
   if (hasError) {
     return (

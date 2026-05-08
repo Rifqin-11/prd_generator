@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
-import { generateWithGemini } from "@/lib/ai/gemini";
+import { generateWithOpenRouter } from "@/lib/ai/openrouter";
 import { buildChatSystemPrompt, buildChatUserPrompt } from "@/lib/prompts";
 import {
   normalizePhase,
   normalizeStructuredAnswers,
   resolveNextPhase,
 } from "@/lib/phase-context";
-import type { ChatApiResponse, ChatQuestion, Phase, QuestionMode, StructuredAnswers } from "@/lib/types";
+import type {
+  ChatApiResponse,
+  ChatQuestion,
+  Phase,
+  QuestionMode,
+  StructuredAnswers,
+} from "@/lib/types";
 import { isTemplateMode, sanitizeMessages } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -19,7 +25,9 @@ export async function POST(request: Request) {
       : "simple";
     const phase = normalizePhase(body.phase, "discovery");
     const questionMode = normalizeQuestionMode(body.questionMode);
-    const structuredAnswers = normalizeStructuredAnswers(body.structuredAnswers);
+    const structuredAnswers = normalizeStructuredAnswers(
+      body.structuredAnswers,
+    );
     const messages = sanitizeMessages(body.messages);
 
     if (messages.length === 0) {
@@ -29,14 +37,43 @@ export async function POST(request: Request) {
       );
     }
 
-    const raw = await generateWithGemini({
-      systemInstruction: buildChatSystemPrompt(templateMode, phase, questionMode),
+    const raw = await generateWithOpenRouter({
+      systemInstruction: buildChatSystemPrompt(
+        templateMode,
+        phase,
+        questionMode,
+      ),
       prompt: buildChatUserPrompt({ phase, messages, structuredAnswers }),
       responseMimeType: "application/json",
-      maxOutputTokens: questionMode === "fast" ? 1400 : 900,
+      // 5 opsi × 80 char × 3 pertanyaan + JSON skeleton ≈ 1500 tokens minimal.
+      // Naikkan generous supaya tidak ke-truncate di tengah array options.
+      maxOutputTokens: questionMode === "fast" ? 4000 : 2400,
     });
 
-    const parsed = parseChatResponse(raw, phase, structuredAnswers, questionMode);
+    if (process.env.NODE_ENV !== "production") {
+      console.log("\n[chat] === RAW AI RESPONSE ===");
+      console.log(raw);
+      console.log("[chat] === END RAW ===\n");
+    }
+
+    const parsed = parseChatResponse(
+      raw,
+      phase,
+      structuredAnswers,
+      questionMode,
+    );
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        "[chat] parsed questions:",
+        JSON.stringify(
+          parsed.questions.map((q) => ({ text: q.text, options: q.options })),
+          null,
+          2,
+        ),
+      );
+    }
+
     return NextResponse.json(parsed);
   } catch (error) {
     return NextResponse.json(
@@ -58,13 +95,21 @@ function parseChatResponse(
   questionMode: QuestionMode,
 ): ChatApiResponse {
   try {
-    const parsed = JSON.parse(stripJsonFence(raw)) as Partial<ChatApiResponse>;
+    const parsed = parseJsonLoose(raw) as Partial<ChatApiResponse>;
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Parsed value is not an object");
+    }
     let questions = normalizeQuestions(parsed.questions);
     let message =
       typeof parsed.message === "string" ? parsed.message.trim() : "";
-    const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+    const summary =
+      typeof parsed.summary === "string" ? parsed.summary.trim() : "";
     const requestedPhase = normalizePhase(parsed.nextPhase, currentPhase);
-    const nextPhase = resolveNextPhase(currentPhase, requestedPhase, structuredAnswers);
+    const nextPhase = resolveNextPhase(
+      currentPhase,
+      requestedPhase,
+      structuredAnswers,
+    );
 
     if (questions.length === 0 && message) {
       const nested = tryParseNestedQuestions(message);
@@ -85,12 +130,17 @@ function parseChatResponse(
       summary: nextPhase === "validation" ? summary || message : "",
       nextPhase,
       readyToGenerate:
-        nextPhase === "generation" && (questionMode === "fast" || Boolean(parsed.readyToGenerate)),
+        nextPhase === "generation" &&
+        (questionMode === "fast" || Boolean(parsed.readyToGenerate)),
     };
   } catch {
     const extracted = extractQuestionTextsFromRaw(raw);
     const questions = normalizeQuestions(extracted);
-    const nextPhase = resolveNextPhase(currentPhase, currentPhase, structuredAnswers);
+    const nextPhase = resolveNextPhase(
+      currentPhase,
+      currentPhase,
+      structuredAnswers,
+    );
 
     return {
       message: "",
@@ -108,6 +158,152 @@ function stripJsonFence(value: string) {
     .replace(/^```\s*/i, "")
     .replace(/```$/i, "")
     .trim();
+}
+
+/**
+ * Parse JSON yang toleran terhadap prose/markdown di sekeliling object.
+ * Banyak free model (Ring-2.6-1T, Nemotron, Laguna) menambah teks pengantar
+ * atau memotong response di tengah jalan kalau token budget habis.
+ */
+function parseJsonLoose(value: string): unknown {
+  const cleaned = stripJsonFence(value);
+
+  // 1) Coba parse langsung.
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // lanjut ke fallback
+  }
+
+  // 2) Cari JSON object terbesar lewat first '{' .. last '}'.
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const candidate = cleaned.slice(start, end + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // lanjut
+    }
+  }
+
+  // 3) JSON kemungkinan terpotong di tengah (truncation karena max_tokens).
+  // Cari first '{' dan repair dengan menutup brace/bracket yang masih open.
+  if (start >= 0) {
+    const repaired = repairTruncatedJson(cleaned.slice(start));
+    if (repaired) {
+      try {
+        return JSON.parse(repaired);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // 4) Coba JSON array (kalau model lupa wrap di object).
+  const arrStart = cleaned.indexOf("[");
+  const arrEnd = cleaned.lastIndexOf("]");
+  if (arrStart >= 0 && arrEnd > arrStart) {
+    const candidate = cleaned.slice(arrStart, arrEnd + 1);
+    try {
+      const arr = JSON.parse(candidate);
+      if (Array.isArray(arr)) return { questions: arr };
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Tutup brace/bracket yang masih open setelah model memotong response di tengah.
+ * Strategi: cari titik aman terakhir (sehabis koma atau closing bracket di
+ * level array/object), truncate ke titik itu, lalu append closing bracket
+ * sesuai stack yang masih open.
+ */
+function repairTruncatedJson(input: string): string | null {
+  if (!input.startsWith("{") && !input.startsWith("[")) return null;
+
+  let inString = false;
+  let escape = false;
+  // Stack berisi karakter penutup yang dibutuhkan ('}' atau ']').
+  const stack: string[] = [];
+  // Posisi terakhir yang aman untuk dipotong (= setelah value lengkap).
+  let lastSafeCut = -1;
+
+  for (let i = 0; i < input.length; i++) {
+    const c = input[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (c === "\\") {
+        escape = true;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (c === "{") stack.push("}");
+    else if (c === "[") stack.push("]");
+    else if (c === "}" || c === "]") {
+      stack.pop();
+      lastSafeCut = i; // setelah closing brace/bracket = boundary aman
+    } else if (c === "," && stack.length > 0) {
+      // Koma di dalam array/object yang masih open → titik aman sebelum koma.
+      lastSafeCut = i - 1;
+    }
+  }
+
+  if (stack.length === 0) {
+    return input;
+  }
+  if (lastSafeCut < 0) {
+    return null;
+  }
+
+  // Truncate ke titik aman lalu re-walk untuk hitung stack yang tersisa.
+  let truncated = input.slice(0, lastSafeCut + 1);
+
+  const closingStack: string[] = [];
+  let s2 = false;
+  let e2 = false;
+  for (let i = 0; i < truncated.length; i++) {
+    const c = truncated[i];
+    if (e2) {
+      e2 = false;
+      continue;
+    }
+    if (s2) {
+      if (c === "\\") {
+        e2 = true;
+        continue;
+      }
+      if (c === '"') s2 = false;
+      continue;
+    }
+    if (c === '"') {
+      s2 = true;
+      continue;
+    }
+    if (c === "{") closingStack.push("}");
+    else if (c === "[") closingStack.push("]");
+    else if (c === "}" || c === "]") closingStack.pop();
+  }
+
+  while (closingStack.length > 0) {
+    truncated += closingStack.pop();
+  }
+
+  return truncated;
 }
 
 function extractQuestions(value: string) {
@@ -233,7 +429,11 @@ function shouldAskQuestions(phase: Phase) {
   return phase === "discovery" || phase === "refinement";
 }
 
-function normalizeQuestionLimit(questions: ChatQuestion[], phase: Phase, questionMode: QuestionMode) {
+function normalizeQuestionLimit(
+  questions: ChatQuestion[],
+  phase: Phase,
+  questionMode: QuestionMode,
+) {
   if (questionMode === "fast") return questions.slice(0, 10);
   return shouldAskQuestions(phase) ? questions.slice(0, 3) : [];
 }

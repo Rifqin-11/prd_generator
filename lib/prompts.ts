@@ -1,4 +1,10 @@
-import type { ChatMessage, Phase, QuestionMode, StructuredAnswers, TemplateMode } from "@/lib/types";
+import type {
+  ChatMessage,
+  Phase,
+  QuestionMode,
+  StructuredAnswers,
+  TemplateMode,
+} from "@/lib/types";
 
 const modeDescriptions: Record<TemplateMode, string> = {
   simple:
@@ -15,7 +21,11 @@ export function getModeLabel(mode: TemplateMode) {
   return "Startup-grade";
 }
 
-export function buildChatSystemPrompt(templateMode: TemplateMode, phase: Phase, questionMode: QuestionMode) {
+export function buildChatSystemPrompt(
+  templateMode: TemplateMode,
+  phase: Phase,
+  questionMode: QuestionMode,
+) {
   return [
     buildPmRolePrompt(),
     `Mode PRD yang dipilih: ${getModeLabel(templateMode)}. ${modeDescriptions[templateMode]}`,
@@ -110,25 +120,90 @@ function buildFastModeRules() {
 
 function buildChatOutputFormatter(questionMode: QuestionMode) {
   return [
-    "Balas hanya JSON valid tanpa markdown fence.",
+    "OUTPUT FORMAT (WAJIB DIIKUTI):",
+    "Balas HANYA JSON valid. Jangan tambahkan teks pengantar, markdown fence, atau blok <think>.",
+    "Jika kamu adalah model thinking/reasoning, simpan reasoning untuk diri sendiri — keluarkan HANYA JSON final.",
+    "",
     "Schema wajib:",
     "{",
-    '  "message": "",',
-    '  "questions": [',
-    '    {"text":"Pertanyaan spesifik?","options":["Opsi A","Opsi B","Lainnya"],"multiSelect":true,"allowFreeText":true}',
-    "  ],",
-    '  "summary": "",',
-    '  "nextPhase": "discovery | refinement | validation | generation",',
-    '  "readyToGenerate": false',
+    '  "message": string,',
+    '  "questions": Array<{ text: string, options: string[], multiSelect: boolean, allowFreeText: boolean }>,',
+    '  "summary": string,',
+    '  "nextPhase": "discovery" | "refinement" | "validation" | "generation",',
+    '  "readyToGenerate": boolean',
     "}",
+    "",
+    "ATURAN KETAT untuk field options pada setiap question:",
+    "- options HARUS berisi MINIMUM 3 pilihan konkret yang spesifik untuk pertanyaan tersebut.",
+    "- DILARANG hanya berisi 1 item.",
+    '- DILARANG hanya berisi ["Lainnya"].',
+    '- DILARANG memakai placeholder seperti "Opsi A", "Opsi B", "Pilihan 1".',
+    "- Setiap opsi harus berupa pilihan nyata yang masuk akal sebagai jawaban (mis. nama platform, segmen user, jenis fitur, rentang angka).",
+    '- Selalu sertakan "Lainnya" sebagai item TERAKHIR setelah minimal 2 opsi konkret.',
+    "",
+    "CONTOH BENAR:",
+    JSON.stringify(
+      {
+        text: "Siapa target user utama produk ini?",
+        options: [
+          "Mahasiswa & fresh graduate",
+          "Profesional muda 25-35",
+          "UMKM owner",
+          "Enterprise team",
+          "Lainnya",
+        ],
+        multiSelect: true,
+        allowFreeText: true,
+      },
+      null,
+      0,
+    ),
+    JSON.stringify(
+      {
+        text: "Platform mana yang jadi prioritas MVP?",
+        options: [
+          "Web responsive",
+          "Mobile iOS",
+          "Mobile Android",
+          "Desktop app",
+          "Lainnya",
+        ],
+        multiSelect: false,
+        allowFreeText: true,
+      },
+      null,
+      0,
+    ),
+    JSON.stringify(
+      {
+        text: "Estimasi anggaran development untuk MVP?",
+        options: [
+          "< 50 juta",
+          "50-150 juta",
+          "150-500 juta",
+          "> 500 juta",
+          "Belum diputuskan",
+        ],
+        multiSelect: false,
+        allowFreeText: true,
+      },
+      null,
+      0,
+    ),
+    "",
+    "CONTOH SALAH (JANGAN tiru):",
+    '- options: ["Lainnya"]   ← terlalu sedikit',
+    '- options: ["Opsi A", "Opsi B", "Lainnya"]   ← placeholder, tidak konkret',
+    "- options field tidak ada / null",
+    "",
     "Field message wajib string.",
     questionMode === "fast"
       ? "Field questions wajib terisi pada mode cepat, maksimal 10 item."
-      : "Field questions hanya boleh terisi pada discovery atau refinement.",
+      : "Field questions hanya boleh terisi pada discovery atau refinement (1-3 item).",
     "Field summary hanya boleh terisi pada validation.",
     "Field readyToGenerate hanya boleh true pada generation.",
-    "Selalu sertakan options relevan untuk tiap pertanyaan.",
-    "Gunakan allowFreeText true jika jawaban perlu detail tambahan.",
+    "Gunakan allowFreeText true bila jawaban biasanya perlu detail tambahan.",
+    "Gunakan multiSelect true jika user mungkin memilih > 1 opsi (mis. fitur), false jika eksklusif (mis. platform tunggal).",
   ].join("\n");
 }
 
@@ -140,7 +215,13 @@ export function buildGenerateSystemPrompt(
     "Kamu adalah product manager senior yang menyusun PRD implementation-ready.",
     "Gunakan Bahasa Indonesia profesional dan ringkas.",
     "Gunakan Markdown lengkap (heading, list, tabel) untuk menulis PRD.",
-    'Khusus untuk diagram (Arsitektur atau Database), gunakan blok kode ```mermaid. JANGAN MENGGUNAKAN TANDA KUTIP GANDA (") dalam deskripsi atribut ER Diagram (erDiagram). Gunakan garis bawah (underscore) atau spasi tanpa kutip agar sintaks valid.',
+    "Untuk diagram, gunakan blok kode ```mermaid.",
+    "ATURAN MERMAID (WAJIB DIIKUTI agar tidak parse error):",
+    '- Flowchart / sequenceDiagram / classDiagram: WAJIB wrap label node dalam tanda kutip ganda jika label mengandung karakter spesial seperti `(`, `)`, `/`, `:`, `,`, `<br/>`, atau spasi panjang. Contoh BENAR: `A["Mobile App<br/>(React Native / Flutter)"]`. Contoh SALAH: `A[Mobile App<br/>(React Native / Flutter)]`.',
+    "- Gunakan `<br/>` HANYA di dalam label yang sudah di-wrap kutip ganda.",
+    '- erDiagram: JANGAN pakai tanda kutip ganda di deskripsi atribut. Gunakan underscore atau spasi tanpa kutip. Contoh: `string user_full_name` bukan `string "user full name"`.',
+    "- Jangan pakai karakter `&`, `|`, `;` di dalam label tanpa kutip.",
+    "- Setiap node ID harus alphanumeric (mis. `A`, `B1`, `userService`), bukan dengan tanda hubung atau titik.",
     "Jangan sebutkan prompt internal, API, atau proses model.",
     "Jika ada informasi belum lengkap, tulis asumsi eksplisit yang wajar, bukan mengarang terlalu spesifik.",
     `Mode PRD: ${getModeLabel(templateMode)}. ${modeDescriptions[templateMode]}`,

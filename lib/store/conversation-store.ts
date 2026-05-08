@@ -1,4 +1,8 @@
-import type { ConversationSnapshot, PrdHistoryItem, TemplateMode } from "@/lib/types";
+import type {
+  ConversationSnapshot,
+  PrdHistoryItem,
+  TemplateMode,
+} from "@/lib/types";
 import { createEmptyStructuredAnswers } from "@/lib/phase-context";
 
 const STORAGE_KEY = "prd-generator:conversation";
@@ -53,11 +57,16 @@ export class SessionConversationStore implements ConversationStore {
 
   saveHistory(items: PrdHistoryItem[]) {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, 12)));
+    window.localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify(items.slice(0, 12)),
+    );
   }
 }
 
-export function createEmptyConversation(templateMode: TemplateMode): ConversationSnapshot {
+export function createEmptyConversation(
+  templateMode: TemplateMode,
+): ConversationSnapshot {
   const now = new Date().toISOString();
 
   return {
@@ -76,5 +85,7 @@ export function createEmptyConversation(templateMode: TemplateMode): Conversatio
     readyToGenerate: false,
     nextStep: "Project brief",
     updatedAt: now,
+    rounds: [],
+    roundIndex: -1,
   };
 }

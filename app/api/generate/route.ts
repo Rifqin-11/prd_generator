@@ -1,8 +1,11 @@
 import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
-import { generateWithGemini } from "@/lib/ai/gemini";
-import { buildGenerateSystemPrompt, buildGenerateUserPrompt } from "@/lib/prompts";
+import { generateWithOpenRouter } from "@/lib/ai/openrouter";
+import {
+  buildGenerateSystemPrompt,
+  buildGenerateUserPrompt,
+} from "@/lib/prompts";
 import { isTemplateMode, sanitizeMessages } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -10,20 +13,31 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
-    const templateMode = isTemplateMode(body.templateMode) ? body.templateMode : "simple";
+    const templateMode = isTemplateMode(body.templateMode)
+      ? body.templateMode
+      : "simple";
     const messages = sanitizeMessages(body.messages);
 
     if (messages.length < 2) {
       return NextResponse.json(
-        { error: "Butuh minimal ide produk dan satu balasan lanjutan sebelum generate PRD." },
+        {
+          error:
+            "Butuh minimal ide produk dan satu balasan lanjutan sebelum generate PRD.",
+        },
         { status: 400 },
       );
     }
 
-    const templateContent = fs.readFileSync(path.join(process.cwd(), "contoh.md"), "utf-8");
+    const templateContent = fs.readFileSync(
+      path.join(process.cwd(), "contoh.md"),
+      "utf-8",
+    );
 
-    const markdown = await generateWithGemini({
-      systemInstruction: buildGenerateSystemPrompt(templateMode, templateContent),
+    const markdown = await generateWithOpenRouter({
+      systemInstruction: buildGenerateSystemPrompt(
+        templateMode,
+        templateContent,
+      ),
       prompt: buildGenerateUserPrompt(messages),
       responseMimeType: "text/plain",
       temperature: 0.35,

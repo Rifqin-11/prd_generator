@@ -13,6 +13,7 @@ import {
   normalizeStructuredAnswers,
 } from "@/lib/phase-context";
 import type {
+  AnswerState,
   ChatApiResponse,
   ChatMessage,
   ChatQuestion,
@@ -20,12 +21,8 @@ import type {
   GenerateApiResponse,
   PrdHistoryItem,
   QuestionMode,
+  RoundState,
 } from "@/lib/types";
-
-type AnswerState = {
-  selected: string[];
-  note: string;
-};
 
 export function PrdGenerator() {
   const store = useMemo(() => new SessionConversationStore(), []);
@@ -147,6 +144,9 @@ export function PrdGenerator() {
       readyToGenerate: false,
       nextStep: "AI is analyzing the brief and tech stack",
       updatedAt: new Date().toISOString(),
+      // Reset rounds — tech stack berubah = konteks AI berubah, semua cache invalid.
+      rounds: [],
+      roundIndex: -1,
     };
 
     await sendChat(nextSnapshot, "questions");
@@ -156,9 +156,61 @@ export function PrdGenerator() {
     if (isChatLoading || isGenerating) return;
 
     const isValidation = snapshot.currentPhase === "validation";
-    const answerContent = isValidation
-      ? "User confirmed the validation summary and approved final PRD generation."
-      : buildAnswerContent(snapshot.lastQuestions, questionAnswers);
+
+    // Validation phase: go straight to PRD generation. Tidak ada cache round.
+    if (isValidation) {
+      const userMessage = createMessage(
+        "user",
+        "User confirmed the validation summary and approved final PRD generation.",
+      );
+      const structuredAnswers = mergeStructuredAnswers(
+        snapshot.structuredAnswers,
+        {
+          questions: snapshot.lastQuestions,
+          answerText: userMessage.content,
+        },
+      );
+      await generatePrd({
+        ...snapshot,
+        messages: [...snapshot.messages, userMessage],
+        structuredAnswers,
+        currentPhase: "generation",
+        readyToGenerate: true,
+        nextStep: "PRD generation",
+        updatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    // Simpan jawaban saat ini ke round aktif sebelum navigate forward.
+    const updatedRounds = [...snapshot.rounds];
+    if (snapshot.roundIndex >= 0 && updatedRounds[snapshot.roundIndex]) {
+      updatedRounds[snapshot.roundIndex] = {
+        ...updatedRounds[snapshot.roundIndex],
+        answers: questionAnswers,
+      };
+    }
+
+    const currentHash = hashAnswers(questionAnswers);
+
+    // Cache hit: round berikutnya sudah ada & dihasilkan dari jawaban yang sama.
+    const cachedNext = updatedRounds[snapshot.roundIndex + 1];
+    if (
+      cachedNext &&
+      cachedNext.generatedFromAnswersHash === currentHash &&
+      snapshot.questionMode !== "fast"
+    ) {
+      restoreRound(updatedRounds, snapshot.roundIndex + 1);
+      return;
+    }
+
+    // Cache miss: drop semua round setelah current, lalu panggil AI.
+    const truncatedRounds = updatedRounds.slice(0, snapshot.roundIndex + 1);
+
+    const answerContent = buildAnswerContent(
+      snapshot.lastQuestions,
+      questionAnswers,
+    );
     const userMessage = createMessage(
       "user",
       answerContent || "User skipped answers.",
@@ -175,30 +227,72 @@ export function PrdGenerator() {
       ...snapshot,
       messages: [...snapshot.messages, userMessage],
       structuredAnswers,
+      rounds: truncatedRounds,
       updatedAt: new Date().toISOString(),
     };
-
-    if (isValidation) {
-      await generatePrd({
-        ...nextSnapshot,
-        currentPhase: "generation",
-        readyToGenerate: true,
-        nextStep: "PRD generation",
-      });
-      return;
-    }
 
     if (snapshot.questionMode === "fast") {
       await generatePrd(nextSnapshot);
       return;
     }
 
-    await sendChat(nextSnapshot, "questions");
+    await sendChat(nextSnapshot, "questions", currentHash);
+  }
+
+  function handleBackRound() {
+    if (isChatLoading || isGenerating) return;
+
+    // Round pertama (atau belum ada round) → balik ke step Tech Stack.
+    if (snapshot.roundIndex <= 0) {
+      handleBack("techstack");
+      return;
+    }
+
+    // Simpan jawaban saat ini ke round aktif sebelum mundur.
+    const updatedRounds = [...snapshot.rounds];
+    if (updatedRounds[snapshot.roundIndex]) {
+      updatedRounds[snapshot.roundIndex] = {
+        ...updatedRounds[snapshot.roundIndex],
+        answers: questionAnswers,
+      };
+    }
+
+    restoreRound(updatedRounds, snapshot.roundIndex - 1);
+  }
+
+  /** Restore conversation state ke round tertentu di stack tanpa memanggil AI. */
+  function restoreRound(rounds: RoundState[], targetIndex: number) {
+    const round = rounds[targetIndex];
+    if (!round) return;
+
+    setError("");
+    setSnapshot({
+      ...snapshot,
+      rounds,
+      roundIndex: targetIndex,
+      lastQuestions: round.questions,
+      summary: round.summary,
+      readyToGenerate: round.readyToGenerate,
+      currentPhase: round.currentPhase,
+      messages: round.messagesAtEnd,
+      structuredAnswers: round.structuredAnswersAtEnd,
+      nextStep: getPhaseStep(round.currentPhase),
+      updatedAt: new Date().toISOString(),
+    });
+    setQuestionAnswers(
+      round.answers.length > 0
+        ? round.answers
+        : Array.from({ length: round.questions.length }, () => ({
+            selected: [],
+            note: "",
+          })),
+    );
   }
 
   async function sendChat(
     nextSnapshot: ConversationSnapshot,
     nextPhase: ConversationSnapshot["phase"],
+    generatedFromAnswersHash = "",
   ) {
     setError("");
     setIsChatLoading(true);
@@ -229,30 +323,47 @@ export function PrdGenerator() {
         nextSnapshot.currentPhase,
       );
 
+      const assistantMessage = createMessage(
+        "assistant",
+        formatAssistantMessage(
+          data.message || "",
+          data.questions || [],
+          data.summary || "",
+        ),
+      );
+      const newMessages = [...nextSnapshot.messages, assistantMessage];
+      const questions = data.questions || [];
+      const readyToGenerate =
+        nextSnapshot.questionMode === "fast" || Boolean(data.readyToGenerate);
+
+      const newRound: RoundState = {
+        questions,
+        answers: [],
+        summary: data.summary || "",
+        readyToGenerate,
+        currentPhase,
+        generatedFromAnswersHash,
+        messagesAtEnd: newMessages,
+        structuredAnswersAtEnd: nextSnapshot.structuredAnswers,
+      };
+
+      const newRounds = [...nextSnapshot.rounds, newRound];
+
       setSnapshot({
         ...nextSnapshot,
         phase: nextPhase,
         currentPhase,
-        messages: [
-          ...nextSnapshot.messages,
-          createMessage(
-            "assistant",
-            formatAssistantMessage(
-              data.message || "",
-              data.questions || [],
-              data.summary || "",
-            ),
-          ),
-        ],
-        readyToGenerate:
-          nextSnapshot.questionMode === "fast" || Boolean(data.readyToGenerate),
+        messages: newMessages,
+        readyToGenerate,
         summary: data.summary || "",
         nextStep: getPhaseStep(currentPhase),
-        lastQuestions: data.questions || [],
+        lastQuestions: questions,
+        rounds: newRounds,
+        roundIndex: newRounds.length - 1,
         updatedAt: new Date().toISOString(),
       });
       setQuestionAnswers(
-        Array.from({ length: (data.questions || []).length }, () => ({
+        Array.from({ length: questions.length }, () => ({
           selected: [],
           note: "",
         })),
@@ -333,6 +444,16 @@ export function PrdGenerator() {
     setCopied(false);
     setIsSidebarOpen(false);
     store.clear();
+  }
+
+  function handleBack(targetPhase: ConversationSnapshot["phase"]) {
+    if (isChatLoading || isGenerating) return;
+    setError("");
+    setSnapshot({
+      ...snapshot,
+      phase: targetPhase,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   function openHistory(item: PrdHistoryItem) {
@@ -586,17 +707,23 @@ export function PrdGenerator() {
 
               {snapshot.phase === "mode" ? (
                 <QuestionModeStep
+                  initialMode={snapshot.questionMode}
                   error={error}
                   onSubmit={handleQuestionModeSubmit}
+                  onBack={() => handleBack("brief")}
                 />
               ) : null}
 
               {snapshot.phase === "techstack" ? (
                 <TechStackStep
                   projectIdea={snapshot.projectIdea}
+                  initialTechStackPref={extractTechStackPref(
+                    snapshot.structuredAnswers.constraints,
+                  )}
                   isLoading={isChatLoading}
                   error={error}
                   onSubmit={handleTechStackSubmit}
+                  onBack={() => handleBack("mode")}
                 />
               ) : null}
 
@@ -622,6 +749,7 @@ export function PrdGenerator() {
                     error={error}
                     onAnswerChange={setQuestionAnswers}
                     onSubmit={handleQuestionSubmit}
+                    onBack={handleBackRound}
                   />
                 )
               ) : null}
@@ -796,10 +924,14 @@ function StepBadge({ index, label }: { index: number; label: string }) {
 }
 
 function QuestionModeStep(props: {
+  initialMode?: QuestionMode;
   error: string;
   onSubmit: (questionMode: QuestionMode) => void;
+  onBack: () => void;
 }) {
-  const [questionMode, setQuestionMode] = useState<QuestionMode>("adaptive");
+  const [questionMode, setQuestionMode] = useState<QuestionMode>(
+    props.initialMode ?? "adaptive",
+  );
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -907,10 +1039,11 @@ function QuestionModeStep(props: {
 
       {props.error ? <ErrorMessage message={props.error} /> : null}
 
-      <div className="mt-8 flex justify-end">
+      <div className="mt-8 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <BackButton onClick={props.onBack} />
         <button
           type="submit"
-          className="ring-focus group inline-flex items-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800"
+          className="ring-focus group inline-flex items-center justify-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800"
         >
           Lanjut
           <svg
@@ -933,14 +1066,66 @@ function QuestionModeStep(props: {
   );
 }
 
+function BackButton({
+  onClick,
+  disabled,
+  label = "Kembali",
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="ring-focus group inline-flex items-center justify-center gap-2 rounded-full border border-stone-900/15 bg-white px-5 py-3 text-sm font-semibold text-stone-700 transition hover:-translate-y-0.5 hover:border-stone-900/30 hover:text-stone-950 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="transition group-hover:-translate-x-0.5"
+      >
+        <line x1="19" y1="12" x2="5" y2="12" />
+        <polyline points="12 19 5 12 12 5" />
+      </svg>
+      {label}
+    </button>
+  );
+}
+
 function TechStackStep(props: {
   projectIdea: string;
+  initialTechStackPref?: string;
   isLoading: boolean;
   error: string;
   onSubmit: (techStackPref: string) => void;
+  onBack: () => void;
 }) {
-  const [techStackChoice, setTechStackChoice] = useState<"ai" | "manual">("ai");
-  const [manualTechStack, setManualTechStack] = useState("");
+  const initialChoice = useMemo<"ai" | "manual">(() => {
+    const pref = props.initialTechStackPref?.trim();
+    if (!pref) return "ai";
+    return pref.startsWith("Biarkan AI memilih") ? "ai" : "manual";
+  }, [props.initialTechStackPref]);
+
+  const initialManual = useMemo(() => {
+    const pref = props.initialTechStackPref?.trim() ?? "";
+    if (!pref || pref.startsWith("Biarkan AI memilih")) return "";
+    if (pref.startsWith("Bebas, tetapi user")) return "";
+    return pref;
+  }, [props.initialTechStackPref]);
+
+  const [techStackChoice, setTechStackChoice] = useState<"ai" | "manual">(
+    initialChoice,
+  );
+  const [manualTechStack, setManualTechStack] = useState(initialManual);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1075,11 +1260,12 @@ function TechStackStep(props: {
 
       {props.error ? <ErrorMessage message={props.error} /> : null}
 
-      <div className="mt-8 flex justify-end">
+      <div className="mt-8 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <BackButton onClick={props.onBack} disabled={props.isLoading} />
         <button
           type="submit"
           disabled={props.isLoading}
-          className="ring-focus group inline-flex items-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+          className="ring-focus group inline-flex items-center justify-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         >
           {props.isLoading ? (
             <>
@@ -1118,6 +1304,7 @@ function QuestionsStep(props: {
   error: string;
   onAnswerChange: (value: AnswerState[]) => void;
   onSubmit: () => void;
+  onBack: () => void;
 }) {
   const latestQuestions = getLatestQuestions(props.snapshot);
   const hasQuestions = latestQuestions.length > 0;
@@ -1170,10 +1357,18 @@ function QuestionsStep(props: {
     <div className={cardClass}>
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-stone-900/10 pb-6">
         <div className="min-w-0">
-          <StepBadge
-            index={4}
-            label={isValidation ? "Validation" : "Questions"}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <StepBadge
+              index={4}
+              label={isValidation ? "Validation" : "Questions"}
+            />
+            {!isFastMode && props.snapshot.rounds.length > 0 ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-900/10 bg-orange-50 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-orange-700">
+                Round {props.snapshot.roundIndex + 1} /{" "}
+                {props.snapshot.rounds.length}
+              </span>
+            ) : null}
+          </div>
           <h2 className="mt-4 font-display text-3xl font-black tracking-[-0.03em] text-stone-950 sm:text-4xl">
             {isValidation ? "Validasi requirement" : "Beberapa pertanyaan"}
           </h2>
@@ -1368,11 +1563,20 @@ function QuestionsStep(props: {
 
         {props.error ? <ErrorMessage message={props.error} /> : null}
 
-        <div className="mt-8 flex flex-wrap items-center justify-end gap-3 border-t border-stone-900/10 pt-6">
+        <div className="mt-8 flex flex-col-reverse items-stretch gap-3 border-t border-stone-900/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
+          <BackButton
+            onClick={props.onBack}
+            disabled={props.isChatLoading}
+            label={
+              props.snapshot.roundIndex > 0
+                ? "Pertanyaan sebelumnya"
+                : "Kembali ke Tech Stack"
+            }
+          />
           <button
             type="submit"
             disabled={props.isChatLoading}
-            className="ring-focus group inline-flex items-center gap-2 rounded-full bg-stone-950 px-7 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+            className="ring-focus group inline-flex items-center justify-center gap-2 rounded-full bg-stone-950 px-7 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
           >
             {props.isChatLoading ? (
               <>
@@ -1636,6 +1840,37 @@ function createMessage(
   };
 }
 
+/**
+ * Hash deterministik untuk daftar jawaban; dipakai cache invalidation saat
+ * user navigate forward antar round. Sort selected supaya urutan klik tidak
+ * memengaruhi hash.
+ */
+function hashAnswers(answers: AnswerState[]): string {
+  return JSON.stringify(
+    answers.map((answer) => ({
+      selected: [...answer.selected].sort(),
+      note: answer.note.trim(),
+    })),
+  );
+}
+
+/**
+ * Tech stack pref disimpan di structuredAnswers.constraints sebagai entry
+ * dengan prefix "Tech stack: ". Ekstrak kembali untuk pre-fill UI saat user
+ * navigasi back ke step Tech Stack.
+ */
+function extractTechStackPref(constraints: string[] | undefined): string {
+  if (!Array.isArray(constraints)) return "";
+  const prefix = "Tech stack: ";
+  for (let i = constraints.length - 1; i >= 0; i--) {
+    const entry = constraints[i];
+    if (typeof entry === "string" && entry.startsWith(prefix)) {
+      return entry.slice(prefix.length).trim();
+    }
+  }
+  return "";
+}
+
 function buildInitialBriefMessage(projectIdea: string, techStackPref: string) {
   return [
     `Project idea: ${projectIdea.trim()}`,
@@ -1791,5 +2026,8 @@ function migrateSnapshot(snapshot: ConversationSnapshot) {
     summary: snapshot.summary || "",
     structuredAnswers: normalizeStructuredAnswers(snapshot.structuredAnswers),
     updatedAt: snapshot.updatedAt || new Date().toISOString(),
+    rounds: Array.isArray(snapshot.rounds) ? snapshot.rounds : [],
+    roundIndex:
+      typeof snapshot.roundIndex === "number" ? snapshot.roundIndex : -1,
   };
 }
