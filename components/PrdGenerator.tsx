@@ -40,6 +40,16 @@ export function PrdGenerator() {
   const [isHydrated, setIsHydrated] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [isSidebarOpen]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -69,9 +79,12 @@ export function PrdGenerator() {
     if (!projectIdea.trim() || isChatLoading) return;
 
     const title = createTitle(projectIdea);
-    const structuredAnswers = mergeStructuredAnswers(snapshot.structuredAnswers, {
-      projectIdea: projectIdea.trim(),
-    });
+    const structuredAnswers = mergeStructuredAnswers(
+      snapshot.structuredAnswers,
+      {
+        projectIdea: projectIdea.trim(),
+      },
+    );
 
     const nextSnapshot: ConversationSnapshot = {
       ...snapshot,
@@ -109,10 +122,13 @@ export function PrdGenerator() {
   async function handleTechStackSubmit(techStackPref: string) {
     if (!snapshot.projectIdea.trim() || isChatLoading) return;
 
-    const structuredAnswers = mergeStructuredAnswers(snapshot.structuredAnswers, {
-      projectIdea: snapshot.projectIdea,
-      techStackPref,
-    });
+    const structuredAnswers = mergeStructuredAnswers(
+      snapshot.structuredAnswers,
+      {
+        projectIdea: snapshot.projectIdea,
+        techStackPref,
+      },
+    );
 
     const nextSnapshot: ConversationSnapshot = {
       ...snapshot,
@@ -143,11 +159,17 @@ export function PrdGenerator() {
     const answerContent = isValidation
       ? "User confirmed the validation summary and approved final PRD generation."
       : buildAnswerContent(snapshot.lastQuestions, questionAnswers);
-    const userMessage = createMessage("user", answerContent || "User skipped answers.");
-    const structuredAnswers = mergeStructuredAnswers(snapshot.structuredAnswers, {
-      questions: snapshot.lastQuestions,
-      answerText: userMessage.content,
-    });
+    const userMessage = createMessage(
+      "user",
+      answerContent || "User skipped answers.",
+    );
+    const structuredAnswers = mergeStructuredAnswers(
+      snapshot.structuredAnswers,
+      {
+        questions: snapshot.lastQuestions,
+        answerText: userMessage.content,
+      },
+    );
 
     const nextSnapshot: ConversationSnapshot = {
       ...snapshot,
@@ -202,7 +224,10 @@ export function PrdGenerator() {
       if (!response.ok)
         throw new Error(data.error || "AI gagal memproses brief.");
 
-      const currentPhase = normalizePhase(data.nextPhase, nextSnapshot.currentPhase);
+      const currentPhase = normalizePhase(
+        data.nextPhase,
+        nextSnapshot.currentPhase,
+      );
 
       setSnapshot({
         ...nextSnapshot,
@@ -212,10 +237,15 @@ export function PrdGenerator() {
           ...nextSnapshot.messages,
           createMessage(
             "assistant",
-            formatAssistantMessage(data.message || "", data.questions || [], data.summary || ""),
+            formatAssistantMessage(
+              data.message || "",
+              data.questions || [],
+              data.summary || "",
+            ),
           ),
         ],
-        readyToGenerate: nextSnapshot.questionMode === "fast" || Boolean(data.readyToGenerate),
+        readyToGenerate:
+          nextSnapshot.questionMode === "fast" || Boolean(data.readyToGenerate),
         summary: data.summary || "",
         nextStep: getPhaseStep(currentPhase),
         lastQuestions: data.questions || [],
@@ -301,6 +331,7 @@ export function PrdGenerator() {
     setQuestionAnswers([]);
     setError("");
     setCopied(false);
+    setIsSidebarOpen(false);
     store.clear();
   }
 
@@ -325,6 +356,7 @@ export function PrdGenerator() {
     setProjectIdea(item.projectIdea);
     setQuestionAnswers([]);
     setError("");
+    setIsSidebarOpen(false);
   }
 
   async function copyMarkdown() {
@@ -376,105 +408,235 @@ export function PrdGenerator() {
   }
 
   return (
-    <main className="min-h-screen bg-stone-50 text-stone-950">
-      <div className="grid min-h-screen lg:grid-cols-[320px_1fr]">
-        <aside className="border-b border-stone-200 bg-white px-5 py-6 lg:border-b-0 lg:border-r lg:flex lg:flex-col lg:h-screen lg:sticky lg:top-0">
-          <div className="mb-6">
-            <h1 className="font-display text-2xl font-black tracking-[-0.04em] text-stone-950">
-              PRD Generator
-            </h1>
-          </div>
+    <main className="relative min-h-screen text-stone-950">
+      {/* Mobile top bar */}
+      <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-stone-900/10 bg-paper-soft/80 px-4 py-3 backdrop-blur-md lg:hidden">
+        <button
+          type="button"
+          onClick={() => setIsSidebarOpen(true)}
+          className="ring-focus inline-flex h-10 w-10 items-center justify-center rounded-xl border border-stone-900/10 bg-white text-stone-700 transition hover:border-stone-900/30 hover:text-stone-950"
+          aria-label="Open menu"
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="18" x2="20" y2="18" />
+          </svg>
+        </button>
+        <BrandMark />
+        <button
+          type="button"
+          onClick={startNewPrd}
+          className="ring-focus inline-flex h-10 items-center gap-1.5 rounded-xl bg-stone-950 px-3 text-xs font-semibold text-white transition hover:bg-stone-800"
+          aria-label="New PRD"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          New
+        </button>
+      </header>
 
-          <div className="flex-1 overflow-y-auto space-y-2 pb-4">
+      <div className="lg:grid lg:min-h-screen lg:grid-cols-[300px_1fr]">
+        {/* Sidebar drawer (mobile) + sticky panel (desktop) */}
+        {isSidebarOpen ? (
+          <button
+            type="button"
+            aria-label="Close menu"
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 z-40 bg-stone-950/40 backdrop-blur-sm lg:hidden"
+          />
+        ) : null}
+
+        <aside
+          className={`fixed inset-y-0 left-0 z-50 flex w-[88%] max-w-[320px] flex-col border-r border-stone-900/10 bg-paper-soft/95 px-5 py-6 transition-transform duration-300 ease-out lg:sticky lg:top-0 lg:z-auto lg:flex lg:h-screen lg:w-auto lg:max-w-none lg:translate-x-0 lg:bg-paper-soft/60 lg:backdrop-blur ${
+            isSidebarOpen
+              ? "translate-x-0"
+              : "-translate-x-full lg:translate-x-0"
+          }`}
+        >
+          <div className="mb-6 flex items-center justify-between gap-3">
+            <BrandMark />
             <button
               type="button"
-              onClick={startNewPrd}
-              className={`flex w-full items-center justify-center rounded-2xl border-2 border-dashed p-4 text-sm font-bold transition ${
-                snapshot.phase === "brief" && !snapshot.sessionId
-                  ? "border-stone-900 bg-stone-50 text-stone-950"
-                  : "border-stone-200 bg-white text-stone-500 hover:border-stone-400 hover:text-stone-900"
-              }`}
+              onClick={() => setIsSidebarOpen(false)}
+              className="ring-focus inline-flex h-9 w-9 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-900/5 hover:text-stone-900 lg:hidden"
+              aria-label="Close menu"
             >
-              + New PRD
-            </button>
-
-            {history.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => openHistory(item)}
-                className={`w-full rounded-2xl border p-4 text-left transition hover:border-stone-950 ${
-                  snapshot.sessionId === item.id
-                    ? "border-stone-950 bg-stone-950 text-white"
-                    : "border-stone-200 bg-white text-stone-950"
-                }`}
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                <span className="block truncate text-sm font-black">
-                  {item.title}
-                </span>
-              </button>
-            ))}
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
           </div>
+
+          <button
+            type="button"
+            onClick={startNewPrd}
+            className={`ring-focus group mb-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-3 text-sm font-semibold transition ${
+              snapshot.phase === "brief" && !snapshot.sessionId
+                ? "border-stone-900 bg-white text-stone-950"
+                : "border-stone-900/20 bg-white/60 text-stone-600 hover:border-stone-900/40 hover:bg-white hover:text-stone-950"
+            }`}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            New PRD
+          </button>
+
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-stone-500">
+              History
+            </p>
+            <span className="text-[11px] font-medium text-stone-400">
+              {history.length}
+            </span>
+          </div>
+
+          <div className="-mr-2 flex-1 space-y-1.5 overflow-y-auto pr-2 pb-4">
+            {history.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-stone-900/15 bg-white/40 px-3 py-6 text-center text-xs text-stone-500">
+                Belum ada PRD tersimpan.
+              </p>
+            ) : (
+              history.map((item) => {
+                const active = snapshot.sessionId === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => openHistory(item)}
+                    className={`ring-focus group block w-full rounded-xl border px-3 py-3 text-left transition ${
+                      active
+                        ? "border-stone-950 bg-stone-950 text-white shadow-sm"
+                        : "border-transparent bg-white/60 text-stone-800 hover:border-stone-900/15 hover:bg-white"
+                    }`}
+                  >
+                    <span className="block truncate text-sm font-semibold">
+                      {item.title}
+                    </span>
+                    <span
+                      className={`mt-0.5 block truncate text-xs ${active ? "text-stone-300" : "text-stone-500"}`}
+                    >
+                      {item.projectIdea || "—"}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          <p className="mt-2 hidden text-[11px] leading-5 text-stone-500 lg:block">
+            Powered by Gemini · Output disimpan lokal di browser kamu.
+          </p>
         </aside>
 
-        <section className="flex min-h-screen items-center justify-center px-5 py-8 sm:px-8">
+        <section className="flex min-h-[calc(100vh-57px)] items-start justify-center px-4 py-8 sm:px-6 lg:min-h-screen lg:items-center lg:px-10 lg:py-12">
           <div className="w-full max-w-4xl">
             <StepIndicator phase={snapshot.phase} />
 
-            {snapshot.phase === "brief" ? (
-              <BriefStep
-                projectIdea={projectIdea}
-                error={error}
-                onProjectIdeaChange={setProjectIdea}
-                onSubmit={handleBriefSubmit}
-              />
-            ) : null}
-
-            {snapshot.phase === "mode" ? (
-              <QuestionModeStep error={error} onSubmit={handleQuestionModeSubmit} />
-            ) : null}
-
-            {snapshot.phase === "techstack" ? (
-              <TechStackStep
-                projectIdea={snapshot.projectIdea}
-                isLoading={isChatLoading}
-                error={error}
-                onSubmit={handleTechStackSubmit}
-              />
-            ) : null}
-
-            {snapshot.phase === "questions" ? (
-              isGenerating || isChatLoading ? (
-                <LoadingStep
-                  title={isGenerating ? "Menyusun PRD Final..." : "Menganalisis jawaban..."}
-                  description={
-                    isGenerating
-                      ? "Harap tunggu sebentar sementara AI merangkum semua jawaban Anda dan menyusun PRD berdasarkan template yang ditentukan."
-                      : "AI sedang membaca jawaban terbaru dan menyiapkan langkah berikutnya."
-                  }
-                />
-              ) : (
-                <QuestionsStep
-                  snapshot={snapshot}
-                  questionAnswers={questionAnswers}
-                  isChatLoading={isChatLoading}
+            <div key={snapshot.phase} className="animate-rise">
+              {snapshot.phase === "brief" ? (
+                <BriefStep
+                  projectIdea={projectIdea}
                   error={error}
-                  onAnswerChange={setQuestionAnswers}
-                  onSubmit={handleQuestionSubmit}
+                  onProjectIdeaChange={setProjectIdea}
+                  onSubmit={handleBriefSubmit}
                 />
-              )
-            ) : null}
+              ) : null}
 
-            {snapshot.phase === "result" ? (
-              <ResultStep
-                snapshot={snapshot}
-                copied={copied}
-                error={error}
-                onCopy={copyMarkdown}
-                onDownload={downloadMarkdown}
-                onShare={sharePrd}
-              />
-            ) : null}
+              {snapshot.phase === "mode" ? (
+                <QuestionModeStep
+                  error={error}
+                  onSubmit={handleQuestionModeSubmit}
+                />
+              ) : null}
+
+              {snapshot.phase === "techstack" ? (
+                <TechStackStep
+                  projectIdea={snapshot.projectIdea}
+                  isLoading={isChatLoading}
+                  error={error}
+                  onSubmit={handleTechStackSubmit}
+                />
+              ) : null}
+
+              {snapshot.phase === "questions" ? (
+                isGenerating || isChatLoading ? (
+                  <LoadingStep
+                    title={
+                      isGenerating
+                        ? "Menyusun PRD Final..."
+                        : "Menganalisis jawaban..."
+                    }
+                    description={
+                      isGenerating
+                        ? "Harap tunggu sebentar sementara AI merangkum semua jawaban Anda dan menyusun PRD berdasarkan template yang ditentukan."
+                        : "AI sedang membaca jawaban terbaru dan menyiapkan langkah berikutnya."
+                    }
+                  />
+                ) : (
+                  <QuestionsStep
+                    snapshot={snapshot}
+                    questionAnswers={questionAnswers}
+                    isChatLoading={isChatLoading}
+                    error={error}
+                    onAnswerChange={setQuestionAnswers}
+                    onSubmit={handleQuestionSubmit}
+                  />
+                )
+              ) : null}
+
+              {snapshot.phase === "result" ? (
+                <ResultStep
+                  snapshot={snapshot}
+                  copied={copied}
+                  error={error}
+                  onCopy={copyMarkdown}
+                  onDownload={downloadMarkdown}
+                  onShare={sharePrd}
+                />
+              ) : null}
+            </div>
           </div>
         </section>
       </div>
@@ -482,17 +644,64 @@ export function PrdGenerator() {
   );
 }
 
+function BrandMark() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span
+        aria-hidden
+        className="grid h-9 w-9 place-items-center rounded-xl bg-stone-950 text-white shadow-sm"
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="9" y1="13" x2="15" y2="13" />
+          <line x1="9" y1="17" x2="13" y2="17" />
+        </svg>
+      </span>
+      <div className="leading-tight">
+        <p className="font-display text-lg font-black tracking-[-0.03em] text-stone-950">
+          PRD Generator
+        </p>
+        <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-stone-500">
+          AI · Gemini
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function LoadingStep(props: { title?: string; description?: string }) {
   return (
-    <div className="rounded-[2rem] border border-stone-200 bg-white p-12 text-center shadow-sm flex flex-col items-center justify-center min-h-[400px]">
-      <div className="h-12 w-12 animate-spin rounded-full border-4 border-stone-200 border-t-stone-900 mb-6"></div>
-      <h2 className="font-display text-2xl font-black tracking-[-0.03em] text-stone-900">
+    <div className="flex min-h-[420px] flex-col items-center justify-center rounded-[2rem] border border-stone-900/10 bg-white/80 p-12 text-center shadow-[0_30px_80px_-40px_rgba(20,18,15,0.25)] backdrop-blur">
+      <div className="relative mb-6 h-14 w-14">
+        <div className="absolute inset-0 animate-ping rounded-full bg-orange-500/20" />
+        <div className="relative h-14 w-14 animate-spin rounded-full border-4 border-stone-200 border-t-orange-500" />
+      </div>
+      <h2 className="font-display text-3xl font-black tracking-[-0.03em] text-stone-900">
         {props.title || "Memproses..."}
       </h2>
-      <p className="mt-3 text-sm text-stone-500 max-w-sm mx-auto leading-relaxed">
+      <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-stone-500">
         {props.description || "Harap tunggu sebentar."}
       </p>
     </div>
+  );
+}
+
+function Spinner({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={`inline-block animate-spin rounded-full border-2 border-current border-t-transparent ${className}`}
+    />
   );
 }
 
@@ -502,47 +711,87 @@ function BriefStep(props: {
   onProjectIdeaChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const trimmed = props.projectIdea.trim();
+  const charCount = props.projectIdea.length;
+
   return (
-    <form
-      onSubmit={props.onSubmit}
-      className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
-    >
-      <p className="text-sm font-bold text-stone-500">Step 1</p>
-      <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
+    <form onSubmit={props.onSubmit} className={cardClass}>
+      <StepBadge index={1} label="Project brief" />
+      <h2 className="mt-4 font-display text-4xl font-black tracking-[-0.04em] text-stone-950 sm:text-5xl">
         Project apa yang ingin dibuat?
       </h2>
-      <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
+      <p className="mt-4 max-w-2xl text-[15px] leading-7 text-stone-600">
         Tulis ide project dulu. Setelah itu pilih mode pertanyaan, preferensi
         teknologi, lalu AI menyusun requirement.
       </p>
 
-      <label
-        className="mt-8 block text-sm font-black text-stone-800"
-        htmlFor="projectIdea"
-      >
-        Project brief
-      </label>
-      <textarea
-        id="projectIdea"
-        value={props.projectIdea}
-        onChange={(event) => props.onProjectIdeaChange(event.target.value)}
-        rows={6}
-        placeholder="Contoh: Aplikasi web untuk generate PRD dari ide produk, dengan proses tanya jawab dan export Markdown."
-        className="mt-3 w-full resize-none rounded-3xl border border-stone-200 bg-stone-50 p-5 text-base leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-950 focus:bg-white"
-      />
+      <div className="mt-8">
+        <div className="flex items-center justify-between">
+          <label
+            className="text-sm font-semibold text-stone-800"
+            htmlFor="projectIdea"
+          >
+            Brief
+          </label>
+          <span className="text-xs font-medium text-stone-400">
+            {charCount} chars
+          </span>
+        </div>
+        <textarea
+          id="projectIdea"
+          value={props.projectIdea}
+          onChange={(event) => props.onProjectIdeaChange(event.target.value)}
+          rows={7}
+          placeholder="Contoh: Aplikasi web untuk generate PRD dari ide produk, dengan proses tanya jawab dan export Markdown."
+          className="ring-focus mt-2 w-full resize-none rounded-3xl border border-stone-900/10 bg-stone-50/70 p-5 text-base leading-7 text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-stone-900/30 focus:bg-white"
+        />
+      </div>
 
       {props.error ? <ErrorMessage message={props.error} /> : null}
 
-      <div className="mt-8 flex justify-end">
+      <div className="mt-8 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-stone-500 sm:text-sm">
+          Tip: makin detail brief, makin akurat pertanyaan AI.
+        </p>
         <button
           type="submit"
-          disabled={!props.projectIdea.trim()}
-          className="rounded-full bg-stone-950 px-6 py-4 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={!trimmed}
+          className="ring-focus group inline-flex items-center justify-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
         >
           Lanjut
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="transition group-hover:translate-x-0.5"
+          >
+            <line x1="5" y1="12" x2="19" y2="12" />
+            <polyline points="12 5 19 12 12 19" />
+          </svg>
         </button>
       </div>
     </form>
+  );
+}
+
+const cardClass =
+  "rounded-[2rem] border border-stone-900/10 bg-white/85 p-6 shadow-[0_30px_80px_-40px_rgba(20,18,15,0.25)] backdrop-blur sm:p-9";
+
+function StepBadge({ index, label }: { index: number; label: string }) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-stone-900/10 bg-stone-50 px-3 py-1">
+      <span className="grid h-5 w-5 place-items-center rounded-full bg-stone-950 text-[10px] font-bold text-white">
+        {index}
+      </span>
+      <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-stone-700">
+        {label}
+      </span>
+    </div>
   );
 }
 
@@ -558,15 +807,12 @@ function QuestionModeStep(props: {
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
-    >
-      <p className="text-sm font-bold text-stone-500">Step 2</p>
-      <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
+    <form onSubmit={handleSubmit} className={cardClass}>
+      <StepBadge index={2} label="Question mode" />
+      <h2 className="mt-4 font-display text-4xl font-black tracking-[-0.04em] text-stone-950 sm:text-5xl">
         Pilih cara AI bertanya
       </h2>
-      <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
+      <p className="mt-4 max-w-2xl text-[15px] leading-7 text-stone-600">
         Mode cepat membuat daftar pertanyaan lengkap sekali jalan. Mode adaptive
         bertanya bertahap berdasarkan jawaban sebelumnya.
       </p>
@@ -588,13 +834,29 @@ function QuestionModeStep(props: {
             onChange={() => setQuestionMode("fast")}
           />
           <div className="mb-2 flex items-center gap-3">
-            <div className={`rounded-lg p-1.5 ${questionMode === "fast" ? "text-orange-500" : "text-stone-500"}`}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"></path></svg>
+            <div
+              className={`rounded-lg p-1.5 ${questionMode === "fast" ? "text-orange-500" : "text-stone-500"}`}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"></path>
+              </svg>
             </div>
             <span className="text-base font-bold">Cepat</span>
           </div>
-          <p className={`text-sm ${questionMode === "fast" ? "text-stone-300" : "text-stone-500"}`}>
-            Sekali submit, AI membuat maksimal 10 pertanyaan lalu langsung lanjut generate PRD setelah dijawab
+          <p
+            className={`text-sm ${questionMode === "fast" ? "text-stone-300" : "text-stone-500"}`}
+          >
+            Sekali submit, AI membuat maksimal 10 pertanyaan lalu langsung
+            lanjut generate PRD setelah dijawab
           </p>
         </label>
 
@@ -614,13 +876,31 @@ function QuestionModeStep(props: {
             onChange={() => setQuestionMode("adaptive")}
           />
           <div className="mb-2 flex items-center gap-3">
-            <div className={`rounded-lg p-1.5 ${questionMode === "adaptive" ? "text-orange-500" : "text-stone-500"}`}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 10h8"></path><path d="M8 14h5"></path></svg>
+            <div
+              className={`rounded-lg p-1.5 ${questionMode === "adaptive" ? "text-orange-500" : "text-stone-500"}`}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                <path d="M8 10h8"></path>
+                <path d="M8 14h5"></path>
+              </svg>
             </div>
             <span className="text-base font-bold">Adaptive</span>
           </div>
-          <p className={`text-sm ${questionMode === "adaptive" ? "text-stone-300" : "text-stone-500"}`}>
-            AI bertanya maksimal 3 pertanyaan per tahap dan menyesuaikan pertanyaan dari jawaban terbaru
+          <p
+            className={`text-sm ${questionMode === "adaptive" ? "text-stone-300" : "text-stone-500"}`}
+          >
+            AI bertanya maksimal 3 pertanyaan per tahap dan menyesuaikan
+            pertanyaan dari jawaban terbaru
           </p>
         </label>
       </div>
@@ -630,9 +910,23 @@ function QuestionModeStep(props: {
       <div className="mt-8 flex justify-end">
         <button
           type="submit"
-          className="rounded-full bg-stone-950 px-6 py-4 text-sm font-black text-white transition hover:-translate-y-0.5"
+          className="ring-focus group inline-flex items-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800"
         >
           Lanjut
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="transition group-hover:translate-x-0.5"
+          >
+            <line x1="5" y1="12" x2="19" y2="12" />
+            <polyline points="12 5 19 12 12 19" />
+          </svg>
         </button>
       </div>
     </form>
@@ -660,23 +954,20 @@ function TechStackStep(props: {
   }
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
-    >
-      <p className="text-sm font-bold text-stone-500">Step 3</p>
-      <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em] sm:text-5xl">
+    <form onSubmit={handleSubmit} className={cardClass}>
+      <StepBadge index={3} label="Tech preference" />
+      <h2 className="mt-4 font-display text-4xl font-black tracking-[-0.04em] text-stone-950 sm:text-5xl">
         Preferensi teknologi
       </h2>
-      <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-500">
+      <p className="mt-4 max-w-2xl text-[15px] leading-7 text-stone-600">
         Pilihan ini dipakai AI untuk membuat pertanyaan yang lebih pas, jadi
         halaman berikutnya tidak perlu mengulang pertanyaan dasar soal framework
         atau database.
       </p>
 
       {props.projectIdea ? (
-        <div className="mt-6 rounded-3xl border border-stone-200 bg-stone-50 p-5">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-stone-400">
+        <div className="mt-6 rounded-3xl border border-stone-900/10 bg-stone-50/80 p-5">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-stone-500">
             Brief
           </p>
           <p className="mt-2 line-clamp-3 text-sm leading-7 text-stone-700">
@@ -778,7 +1069,7 @@ function TechStackStep(props: {
           onChange={(event) => setManualTechStack(event.target.value)}
           rows={3}
           placeholder="Contoh: Next.js, Tailwind CSS, Supabase"
-          className="mt-4 w-full resize-none rounded-2xl border-2 border-stone-200 bg-white p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900"
+          className="ring-focus mt-4 w-full resize-none rounded-2xl border border-stone-900/15 bg-white p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900/40"
         />
       ) : null}
 
@@ -788,9 +1079,32 @@ function TechStackStep(props: {
         <button
           type="submit"
           disabled={props.isLoading}
-          className="rounded-full bg-stone-950 px-6 py-4 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+          className="ring-focus group inline-flex items-center gap-2 rounded-full bg-stone-950 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         >
-          {props.isLoading ? "AI menyusun pertanyaan..." : "Lanjut"}
+          {props.isLoading ? (
+            <>
+              <Spinner />
+              <span>AI menyusun pertanyaan...</span>
+            </>
+          ) : (
+            <>
+              <span>Lanjut</span>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="transition group-hover:translate-x-0.5"
+              >
+                <line x1="5" y1="12" x2="19" y2="12" />
+                <polyline points="12 5 19 12 12 19" />
+              </svg>
+            </>
+          )}
         </button>
       </div>
     </form>
@@ -850,15 +1164,20 @@ function QuestionsStep(props: {
     props.onAnswerChange(next);
   }
 
+  const progress = totalCount > 0 ? (answeredCount / totalCount) * 100 : 0;
+
   return (
-    <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200 pb-6">
-        <div>
-          <p className="text-sm font-bold text-stone-500">Step 4</p>
-          <h2 className="font-display text-3xl font-black tracking-[-0.03em] text-stone-900">
+    <div className={cardClass}>
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-stone-900/10 pb-6">
+        <div className="min-w-0">
+          <StepBadge
+            index={4}
+            label={isValidation ? "Validation" : "Questions"}
+          />
+          <h2 className="mt-4 font-display text-3xl font-black tracking-[-0.03em] text-stone-950 sm:text-4xl">
             {isValidation ? "Validasi requirement" : "Beberapa pertanyaan"}
           </h2>
-          <p className="mt-2 text-base text-stone-500">
+          <p className="mt-2 text-[15px] leading-7 text-stone-600">
             {isValidation
               ? "Review ringkasan requirement sebelum PRD final dibuat."
               : isFastMode
@@ -867,111 +1186,228 @@ function QuestionsStep(props: {
           </p>
         </div>
         {hasQuestions && !isValidation ? (
-          <div className="text-sm font-bold text-stone-500">
-            {answeredCount}/{totalCount}
+          <div className="shrink-0 rounded-2xl border border-stone-900/10 bg-stone-50 px-3 py-2 text-right">
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-stone-500">
+              Answered
+            </p>
+            <p className="font-display text-xl font-black text-stone-950">
+              {answeredCount}
+              <span className="text-sm font-bold text-stone-400">
+                /{totalCount}
+              </span>
+            </p>
           </div>
         ) : null}
       </div>
 
+      {hasQuestions && !isValidation ? (
+        <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-stone-200">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-orange-500 to-orange-400 transition-all duration-500"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      ) : null}
+
       <form onSubmit={handleSubmit} className="mt-6">
         {isValidation ? (
-          <div className="rounded-3xl border border-stone-200 bg-stone-50 p-5">
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-stone-400">
+          <div className="rounded-3xl border border-stone-900/10 bg-gradient-to-br from-stone-50 to-white p-6">
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-stone-950 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-white">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
               Summary
-            </p>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-stone-700">
-              {props.snapshot.summary || "Requirement sudah cukup jelas untuk dibuat menjadi PRD final."}
+            </div>
+            <p className="whitespace-pre-wrap text-[15px] leading-7 text-stone-700">
+              {props.snapshot.summary ||
+                "Requirement sudah cukup jelas untuk dibuat menjadi PRD final."}
             </p>
           </div>
         ) : (
           <div className="space-y-6">
             {hasQuestions ? (
-            latestQuestions.map((question, index) => {
-              const answer = props.questionAnswers[index] || {
-                selected: [],
-                note: "",
-              };
-              const options =
-                question.options && question.options.length > 0
-                  ? question.options
-                  : ["Lainnya"];
-              const allowFreeText = question.allowFreeText ?? true;
-              const multiSelect = question.multiSelect ?? true;
+              latestQuestions.map((question, index) => {
+                const answer = props.questionAnswers[index] || {
+                  selected: [],
+                  note: "",
+                };
+                const options =
+                  question.options && question.options.length > 0
+                    ? question.options
+                    : ["Lainnya"];
+                const allowFreeText = question.allowFreeText ?? true;
+                const multiSelect = question.multiSelect ?? true;
 
-              return (
-                <div
-                  key={`${question.text}-${index}`}
-                  className="border-b border-stone-100 pb-6 last:border-0 last:pb-0"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <label
-                      className="block text-base font-bold leading-7 text-stone-900"
-                      htmlFor={`answer-${index}`}
-                    >
-                      {index + 1}. {question.text}
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => clearAnswer(index)}
-                      className="shrink-0 text-sm font-medium text-stone-400 transition hover:text-stone-900"
-                    >
-                      Lewati
-                    </button>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2.5">
-                    {options.map((option) => {
-                      const isSelected = answer.selected.includes(option);
-                      return (
-                        <button
-                          key={`${option}-${index}`}
-                          type="button"
-                          onClick={() =>
-                            toggleOption(index, option, multiSelect)
-                          }
-                          className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                            isSelected
-                              ? "border-orange-500 text-orange-600 bg-orange-50"
-                              : "border-stone-200 bg-white text-stone-600 hover:border-stone-400 hover:text-stone-900"
+                const isAnswered =
+                  answer.selected.length > 0 || answer.note.trim() !== "";
+                return (
+                  <div
+                    key={`${question.text}-${index}`}
+                    className="border-b border-stone-900/10 pb-6 last:border-0 last:pb-0"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <span
+                          aria-hidden
+                          className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold transition ${
+                            isAnswered
+                              ? "bg-stone-950 text-white"
+                              : "bg-stone-100 text-stone-500"
                           }`}
                         >
-                          {option}
+                          {isAnswered ? (
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          ) : (
+                            index + 1
+                          )}
+                        </span>
+                        <label
+                          className="block text-base font-semibold leading-7 text-stone-900"
+                          htmlFor={`answer-${index}`}
+                        >
+                          {question.text}
+                        </label>
+                      </div>
+                      {isAnswered ? (
+                        <button
+                          type="button"
+                          onClick={() => clearAnswer(index)}
+                          className="shrink-0 text-xs font-medium text-stone-400 transition hover:text-stone-900"
+                        >
+                          Reset
                         </button>
-                      );
-                    })}
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => clearAnswer(index)}
+                          className="shrink-0 text-xs font-medium text-stone-400 transition hover:text-stone-900"
+                        >
+                          Lewati
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="mt-4 ml-10 flex flex-wrap gap-2">
+                      {options.map((option) => {
+                        const isSelected = answer.selected.includes(option);
+                        return (
+                          <button
+                            key={`${option}-${index}`}
+                            type="button"
+                            onClick={() =>
+                              toggleOption(index, option, multiSelect)
+                            }
+                            className={`ring-focus inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${
+                              isSelected
+                                ? "border-orange-500 bg-orange-50 text-orange-700"
+                                : "border-stone-900/15 bg-white text-stone-700 hover:border-stone-900/30 hover:text-stone-950"
+                            }`}
+                          >
+                            {isSelected ? (
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            ) : null}
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {allowFreeText ? (
+                      <textarea
+                        id={`answer-${index}`}
+                        value={answer.note}
+                        onChange={(event) =>
+                          updateAnswer(index, event.target.value)
+                        }
+                        rows={2}
+                        placeholder="Tambahkan detail jawaban jika perlu..."
+                        className="ring-focus mt-3 ml-10 w-[calc(100%-2.5rem)] resize-none rounded-2xl border border-stone-900/10 bg-stone-50/70 p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900/30 focus:bg-white"
+                      />
+                    ) : null}
                   </div>
-                  {allowFreeText ? (
-                    <textarea
-                      id={`answer-${index}`}
-                      value={answer.note}
-                      onChange={(event) =>
-                        updateAnswer(index, event.target.value)
-                      }
-                      rows={2}
-                      placeholder="Tambahkan detail jawaban jika perlu..."
-                      className="mt-4 w-full resize-none rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm leading-7 outline-none transition placeholder:text-stone-400 focus:border-stone-900 focus:bg-white"
-                    />
-                  ) : null}
-                </div>
-              );
-            })
-          ) : (
-            <div className="rounded-3xl border border-dashed border-stone-200 bg-stone-50 p-6 text-center text-sm text-stone-500">
-              Tidak ada pertanyaan baru. Kamu bisa lanjut ke validasi requirement.
-            </div>
-          )}
+                );
+              })
+            ) : (
+              <div className="rounded-3xl border border-dashed border-stone-900/15 bg-stone-50/60 p-8 text-center text-sm text-stone-500">
+                Tidak ada pertanyaan baru. Kamu bisa lanjut ke validasi
+                requirement.
+              </div>
+            )}
           </div>
         )}
 
         {props.error ? <ErrorMessage message={props.error} /> : null}
 
-        <div className="mt-8 pt-6 flex flex-wrap justify-end gap-3">
+        <div className="mt-8 flex flex-wrap items-center justify-end gap-3 border-t border-stone-900/10 pt-6">
           <button
             type="submit"
             disabled={props.isChatLoading}
-            className="rounded-full bg-stone-950 px-8 py-4 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+            className="ring-focus group inline-flex items-center gap-2 rounded-full bg-stone-950 px-7 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
           >
-            {isValidation || isFastMode ? "Generate PRD" : "Lanjut"}
+            {props.isChatLoading ? (
+              <>
+                <Spinner />
+                <span>Memproses...</span>
+              </>
+            ) : (
+              <>
+                <span>
+                  {isValidation || isFastMode ? "Generate PRD" : "Lanjut"}
+                </span>
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="transition group-hover:translate-x-0.5"
+                >
+                  {isValidation || isFastMode ? (
+                    <>
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </>
+                  ) : (
+                    <>
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                      <polyline points="12 5 19 12 12 19" />
+                    </>
+                  )}
+                </svg>
+              </>
+            )}
           </button>
         </div>
       </form>
@@ -987,43 +1423,103 @@ function ResultStep(props: {
   onDownload: () => void;
   onShare: () => void;
 }) {
+  const ready = Boolean(props.snapshot.markdown);
+
   return (
-    <div className="rounded-[2rem] border border-stone-200 bg-white p-6 shadow-sm sm:p-8">
+    <div className={cardClass}>
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-bold text-stone-500">Step 5</p>
-          <h2 className="mt-3 font-display text-4xl font-black tracking-[-0.05em]">
+        <div className="min-w-0">
+          <StepBadge index={5} label="Result" />
+          <h2 className="mt-4 font-display text-4xl font-black tracking-[-0.04em] text-stone-950 sm:text-5xl">
             Final PRD
           </h2>
-          <p className="mt-3 text-sm leading-7 text-stone-500">
-            Output PRD dibuat dalam Bahasa Indonesia dan bisa didownload sebagai
-            Markdown.
+          <p className="mt-3 max-w-2xl text-[15px] leading-7 text-stone-600">
+            Output PRD dalam Bahasa Indonesia, siap diunduh sebagai Markdown
+            atau dibagikan.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={props.onCopy}
-            disabled={!props.snapshot.markdown}
-            className="rounded-full border border-stone-300 px-4 py-3 text-sm font-black transition hover:border-stone-950 hover:bg-stone-950 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!ready}
+            className="ring-focus inline-flex items-center gap-1.5 rounded-full border border-stone-900/15 bg-white px-4 py-2.5 text-sm font-semibold text-stone-800 transition hover:border-stone-900/40 hover:bg-stone-950 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
+            {props.copied ? (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
             {props.copied ? "Copied" : "Copy"}
           </button>
           <button
             type="button"
-            onClick={props.onDownload}
-            disabled={!props.snapshot.markdown}
-            className="rounded-full bg-stone-950 px-4 py-3 text-sm font-black text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={props.onShare}
+            disabled={!ready}
+            className="ring-focus inline-flex items-center gap-1.5 rounded-full border border-stone-900/15 bg-white px-4 py-2.5 text-sm font-semibold text-stone-800 transition hover:border-stone-900/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Download .md
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+            </svg>
+            Share
           </button>
           <button
             type="button"
-            onClick={props.onShare}
-            disabled={!props.snapshot.markdown}
-            className="rounded-full border border-stone-300 px-4 py-3 text-sm font-black transition hover:border-stone-950"
+            onClick={props.onDownload}
+            disabled={!ready}
+            className="ring-focus inline-flex items-center gap-1.5 rounded-full bg-stone-950 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
           >
-            Share
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Download .md
           </button>
         </div>
       </div>
@@ -1046,27 +1542,85 @@ function StepIndicator({ phase }: { phase: ConversationSnapshot["phase"] }) {
     { id: "result", label: "Result" },
   ];
 
+  const currentIndex = steps.findIndex((step) => step.id === phase);
+  const totalSteps = steps.length;
+
   return (
-    <div className="mb-6 flex gap-2">
-      {steps.map((step) => {
-        const active = phase === step.id;
-        return (
-          <div
-            key={step.id}
-            className={`h-2 flex-1 rounded-full transition ${active ? "bg-stone-950" : "bg-stone-200"}`}
-            aria-label={step.label}
-          />
-        );
-      })}
-    </div>
+    <nav aria-label="Progress" className="mb-8">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-stone-500">
+          Step {Math.max(currentIndex + 1, 1)} of {totalSteps}
+        </p>
+        <p className="font-display text-sm font-semibold text-stone-700">
+          {steps[currentIndex]?.label ?? steps[0].label}
+        </p>
+      </div>
+      <ol className="flex gap-1.5 sm:gap-2">
+        {steps.map((step, index) => {
+          const isActive = index === currentIndex;
+          const isComplete = index < currentIndex;
+          return (
+            <li
+              key={step.id}
+              className="group flex-1"
+              aria-current={isActive ? "step" : undefined}
+            >
+              <div
+                className={`relative h-1.5 overflow-hidden rounded-full transition-colors ${
+                  isActive
+                    ? "bg-stone-200"
+                    : isComplete
+                      ? "bg-stone-900"
+                      : "bg-stone-200/70"
+                }`}
+              >
+                {isActive ? (
+                  <span className="absolute inset-y-0 left-0 w-2/3 rounded-full bg-gradient-to-r from-orange-500 to-orange-400" />
+                ) : null}
+              </div>
+              <span
+                className={`mt-2 hidden text-[11px] font-semibold uppercase tracking-[0.12em] sm:block ${
+                  isActive
+                    ? "text-stone-950"
+                    : isComplete
+                      ? "text-stone-700"
+                      : "text-stone-400"
+                }`}
+              >
+                {step.label}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
 function ErrorMessage({ message }: { message: string }) {
   return (
-    <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-      {message}
-    </p>
+    <div
+      role="alert"
+      className="mt-5 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"
+    >
+      <svg
+        aria-hidden
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mt-0.5 shrink-0"
+      >
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+      <span className="leading-6">{message}</span>
+    </div>
   );
 }
 
@@ -1096,15 +1650,21 @@ function buildAnswerContent(questions: ChatQuestion[], answers: AnswerState[]) {
     ? questions
         .map((question, index) => {
           const response = answers[index];
-          if (!response) return `Question: ${question.text}\nAnswer: Not answered.`;
+          if (!response)
+            return `Question: ${question.text}\nAnswer: Not answered.`;
 
-          const selected = response.selected.length > 0 ? response.selected.join(", ") : "-";
+          const selected =
+            response.selected.length > 0 ? response.selected.join(", ") : "-";
           const note = response.note.trim() ? response.note.trim() : "-";
           return `Question: ${question.text}\nAnswer: ${selected}\nNotes: ${note}`;
         })
         .join("\n\n")
     : answers
-        .map((item) => [item.selected.join(", "), item.note.trim()].filter(Boolean).join("\n"))
+        .map((item) =>
+          [item.selected.join(", "), item.note.trim()]
+            .filter(Boolean)
+            .join("\n"),
+        )
         .filter(Boolean)
         .join("\n\n");
 }
@@ -1120,7 +1680,11 @@ function buildGenerationContext(snapshot: ConversationSnapshot) {
     .join("\n\n");
 }
 
-function formatAssistantMessage(message: string, questions: ChatQuestion[], summary = "") {
+function formatAssistantMessage(
+  message: string,
+  questions: ChatQuestion[],
+  summary = "",
+) {
   if (summary.trim()) return summary.trim();
 
   const normalizedQuestions =
@@ -1218,7 +1782,10 @@ function migrateSnapshot(snapshot: ConversationSnapshot) {
       createTitle(snapshot.projectIdea || snapshot.messages[0]?.content || ""),
     projectIdea: snapshot.projectIdea || "",
     phase,
-    currentPhase: normalizePhase(snapshot.currentPhase, snapshot.readyToGenerate ? "generation" : "discovery"),
+    currentPhase: normalizePhase(
+      snapshot.currentPhase,
+      snapshot.readyToGenerate ? "generation" : "discovery",
+    ),
     questionMode: snapshot.questionMode || "adaptive",
     lastQuestions: snapshot.lastQuestions || [],
     summary: snapshot.summary || "",
